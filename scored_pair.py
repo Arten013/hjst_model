@@ -9,10 +9,6 @@ class ScoredPairKVS(KVSDict):
     ENCODING = "utf8"
     PREFIX = "example-"
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.prefix_dicts = dict()
-
     def add_by_iterable(self, list):
         self.add_by_iterable_pairs(itertools.combinations(iterable, 2))
 
@@ -22,16 +18,16 @@ class ScoredPairKVS(KVSDict):
 
     def add_scored_pair(self, i1, i2, score):
         key = "-".join(sorted([i1, i2]))
-        self.prefix_dicts[key] = score
+        self[key] = score
 
     def __iter__(self):
-        for former in self.prefix_dicts.keys():
-            for latter, score in self.prefix_dicts[former].items():
-                yield former, latter, score
+        for key, score in self.items():
+            former, latter = re.split("-", key)
+            yield former, latter, score
 
     def del_pair(self, i1, i2):
         key = "-".join(sorted([i1, i2]))
-        del self.prefix_dicts[key]
+        del self[key]
 
 class LeveledScoredPairKVS(object):
     def __init__(self, path, levels):

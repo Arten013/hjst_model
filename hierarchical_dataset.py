@@ -3,6 +3,7 @@ from xml_jstatutree import xml_lawdata
 from xml_jstatutree.jstatutree.lawdata import SourceInterface
 from xml_jstatutree.jstatutree.myexceptions import *
 from xml_jstatutree.jstatutree.etypes import sort_etypes
+from gensim.models.doc2vec import TaggedDocument
 
 import plyvel
 import os

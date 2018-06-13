@@ -16,7 +16,7 @@ from copy import copy
 
 from hierarchical_dataset import *
 from hierarchical_model import *
-from model_layers import *
+from layers import *
 from scored_pair import *
 
 if __name__ == "__main__":
@@ -49,21 +49,21 @@ if __name__ == "__main__":
     testset = setup_dataset(TESTSET_PATH, TESTSET_DBPATH, LEVELS)
     trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)    
 
-    testpairs = list(itertools.combinations(testset.sentence_dict[Law].keys(), 2))[:100]
-    testpairskvs = LeveledScoredPairKVS(RESULTPATH, LEVELS)
+    testpairs = list(itertools.combinations(list(testset.sentence_dict[Law].keys())[:400], 2))
+    testpairskvs = LeveledScoredPairKVS(os.path.join(RESULTPATH, "DDL400"), LEVELS)
     testpairskvs[LEVELS[0]].add_by_iterable_pairs(testpairs)
 
     hmodels = HierarchicalModel(trainingset)
-    hmodels.set_model(Law, Doc2VecLayer, os.path.join(BASEPATH, "all_LawD2V"), threshold=0.3, top_rate=1.0)
-    hmodels.set_model(Article, Doc2VecLayer, os.path.join(BASEPATH, "all_ArticleD2V"), threshold=0.4, top_rate=1.0)
-    hmodels.set_model(Sentence, LevenLayer, os.path.join(BASEPATH, "all_SentenceD2V"), threshold=0.5, top_rate=1.0)
+    hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, "aichi_LawD2V.model"), threshold=0.3)
+    hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, "aichi_ArticleD2V.model"), threshold=0.4)
+    hmodels.set_layer(Sentence, LevenLayer, os.path.join(BASEPATH, "aichi_SentenceD2V.model"), threshold=0.5)
     hmodels.batch_training()
 
     os.makedirs(RESULTPATH, exist_ok=True)
     with open(os.path.join(BASEPATH, "result_multi.csv"), "w") as f:
         sl = []
         sl.append("label1,sentence1,label2,sentence2,score")
-        for k1, k2, score in hmodels.refine_pairs(testpairskvs):
+        for k1, k2, score in hmodels.refine_pairs(trainingset, testpairskvs):
             #print("score:", score)
             #print("s1:", k1)
             s1 = testset.sentence_dict[Sentence][k1]
@@ -74,15 +74,18 @@ if __name__ == "__main__":
             sl.append(",".join([k1,s1,k2,s2,str(score)]))
         f.write("\n".join(sl))
 
+    testpairskvs = LeveledScoredPairKVS(os.path.join(RESULTPATH, "__L400"), LEVELS)
+    testpairskvs[LEVELS[0]].add_by_iterable_pairs(testpairs)
+
     hmodels = HierarchicalModel(trainingset)
-    hmodels.set_model(Law, Doc2VecLayer, os.path.join(BASEPATH, "all_LawD2V"), threshold=None, top_rate=1.0)
-    hmodels.set_model(Article, Doc2VecLayer, os.path.join(BASEPATH, "all_ArticleD2V"), threshold=None, top_rate=1.0)
-    hmodels.set_model(Sentence, LevenLayer, os.path.join(BASEPATH, "all_SentenceD2V"), threshold=0.5, top_rate=1.0)
+    hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, "aichi_LawD2V.model"), threshold=None)
+    hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, "aichi_ArticleD2V.model"), threshold=None)
+    hmodels.set_layer(Sentence, LevenLayer, os.path.join(BASEPATH, "aichi_SentenceD2V.model"), threshold=0.5)
     hmodels.batch_training()
     with open(os.path.join(BASEPATH, "result_single.csv"), "w") as f:
         sl = []
         sl.append("label1,sentence1,label2,sentence2,score")
-        for k1, k2, score in hmodels.refine_pairs(testpairskvs):
+        for k1, k2, score in hmodels.refine_pairs(testset, testpairskvs):
             #print("score:", score)
             #print("s1:", k1)
             s1 = testset.sentence_dict[Sentence][k1]

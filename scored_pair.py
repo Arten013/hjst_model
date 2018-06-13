@@ -23,13 +23,13 @@ class ScoredPairKVS(KVSDict):
     def add_scored_pair(self, i1, i2, score):
         i1, i2 = sorted([i1, i2])
         if not i1 in self.prefix_dicts:
-            self.prefix_dicts[i1] = KVSPrefixDict(self.db, prefix={"{}-".format(i1)})
+            self.prefix_dicts[i1] = KVSPrefixDict(self.db, prefix="{}-".format(i1))
         self.prefix_dicts[i1][i2] = score
 
     def __iter__(self):
-        for formar in self.prefix_dicts.keys():
-            for lattar, score in self.prefix_dicts[formar].items():
-                yield formar, latter, score
+        for former in self.prefix_dicts.keys():
+            for latter, score in self.prefix_dicts[former].items():
+                yield former, latter, score
 
     def del_pair(self, i1, i2):
         i1, i2 = sorted([i1, i2])

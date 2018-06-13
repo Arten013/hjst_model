@@ -21,10 +21,8 @@ class ScoredPairKVS(KVSDict):
             self.add_scored_pair(i1, i2, 0)
 
     def add_scored_pair(self, i1, i2, score):
-        i1, i2 = sorted([i1, i2])
-        if not i1 in self.prefix_dicts:
-            self.prefix_dicts[i1] = KVSPrefixDict(self.db, prefix="{}-".format(i1))
-        self.prefix_dicts[i1][i2] = score
+        key = "-".join(sorted([i1, i2]))
+        self.prefix_dicts[key] = score
 
     def __iter__(self):
         for former in self.prefix_dicts.keys():
@@ -32,8 +30,8 @@ class ScoredPairKVS(KVSDict):
                 yield former, latter, score
 
     def del_pair(self, i1, i2):
-        i1, i2 = sorted([i1, i2])
-        del self.prefix_dicts[i1][i2]
+        key = "-".join(sorted([i1, i2]))
+        del self.prefix_dicts[key]
 
 class LeveledScoredPairKVS(object):
     def __init__(self, path, levels):

@@ -87,17 +87,12 @@ class HierarchicalModel(object):
             print("refining_time({}):".format(level.__name__), t2-t1, "sec")
             if level == self.levels[-1]:
                 return candidate_pairs[level]
-
-            candidate_pairs[self.levels[li+1]].add_by_iterable_pairs(
-                itertools.chain.from_iterable(
-                        [
-                            itertools.product(
-                                    testset.statutree_dict[k1],
-                                    testset.statutree_dict[k2] 
-                                )
-                            for k1, k2, _ in candidate_pairs[level]
-                        ] 
-                    )
+            for k1, k2, _ in scored_pairs:
+                candidate_pairs[level].add_by_iterable_pairs(
+                    itertools.product(
+                            testset.statutree_dict[k1],
+                            testset.statutree_dict[k2] 
+                        ) 
                 )
             print("calculating next pairs:", time()-t2, "sec")
         

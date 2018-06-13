@@ -47,40 +47,7 @@ if __name__ == "__main__":
     TRAININGSET_DBPATH = os.path.join(BASEPATH, "aichi_all.ldb")
 
     testset = setup_dataset(TESTSET_PATH, TESTSET_DBPATH, LEVELS)
-    trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
-
-    """
-    t = time()
-    dataset.register(PATH)
-    print("reg time:", time() - t)
-    t=time()
-    list(dataset.statutree_dict.items())
-    print("load all tree time:", time() - t)
-    t=time()
-    for v in dataset.sentence_dict.values():
-        list(v.items())
-    print("load all sentence time:", time() - t)
-    """
-    """
-    from pprint import pprint
-    keys = ["23/230006/1847"]
-    for level in dataset.levels:
-        next_keys = []
-        for key in keys:
-            n = dataset.statutree_dict[key]
-            for k in n:
-                pprint(k)
-                print(dataset.sentence_dict[level][k])
-            next_keys.extend(n)
-        keys = next_keys
-    exit()
-    """
-        #for i, (k, s) in enumerate(dataset.sentence_dict[l].items()):
-        #    print(k)
-        #    print(s)
-        #    if i > 20:
-        #        break
-    
+    trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)    
 
     testpairs = list(itertools.combinations(testset.sentence_dict[Law].keys(), 2))[:100]
     testpairskvs = LeveledScoredPairKVS(RESULTPATH, LEVELS)

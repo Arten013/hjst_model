@@ -3,6 +3,7 @@ from xml_jstatutree import xml_lawdata
 from xml_jstatutree.jstatutree.lawdata import SourceInterface
 from xml_jstatutree.jstatutree.myexceptions import *
 from xml_jstatutree.jstatutree.etypes import sort_etypes
+from xml_jstatutree.jstatutree.kvsdict import KVSDict
 from gensim.models.doc2vec import TaggedDocument
 
 import plyvel
@@ -37,16 +38,11 @@ class HierarchicalDataset(object):
         self.only_reiki = only_reiki
         self.only_sentence = only_sentence
         self.levels = sort_etypes(levels)
-        if os.path.exists(dbpath):
-            self.db = plyvel.DB(dbpath, create_if_missing=False)
-            self.is_empty = False
-        else:
-            self.db = plyvel.DB(dbpath, create_if_missing=True)
-            self.is_empty = True
+        self.base_kvsdict = KVSDict(path=dbpath, create_if_missing=True)
         self.sentence_dict = {
-            l:JSSentenceKVSDict(self.db, only_reiki=only_reiki, level=l) for l in levels
+            l:JSSentenceKVSDict(kvsdict=self.base_kvsdict, only_reiki=only_reiki, level=l) for l in levels
             }
-        self.statutree_dict = JStatutreeKVSDict.init_as_prefixed_db(self.db, only_reiki=only_reiki, levels=self.levels)
+        self.statutree_dict = JStatutreeKVSDict.init_as_prefixed_db(self.base_kvsdict, only_reiki=only_reiki, levels=self.levels)
         self.morph_separator = Morph()
 
     def set_data(self, reader):
@@ -68,7 +64,7 @@ class HierarchicalDataset(object):
                         self.sentence_dict[level][key] = "".join(elem.iter_texts())
 
     def register(self, basepath, overwrite=False):
-        if not overwrite and not self.is_empty:
+        if not overwrite and not self.base_kvsdict.is_empty():
             print("skip registering")
             return
         for path in find_all_files(basepath, [".xml"]):

@@ -2,7 +2,7 @@ from xml_jstatutree.jstatutree.kvsdict import KVSDict, KVSPrefixDict
 
 import os
 import itertools
-
+import re
 
 class ScoredPairKVS(KVSDict):
     DEFAULT_DBNAME = "ScoredPair.ldb"

@@ -1,13 +1,4 @@
-from xml_jstatutree.jstatutree.jstatute_dict import JStatutreeKVSDict, JSSentenceKVSDict
-from xml_jstatutree import xml_lawdata
-from xml_jstatutree.jstatutree.lawdata import SourceInterface
-from xml_jstatutree.jstatutree.myexceptions import *
-from xml_jstatutree.jstatutree.etypes import sort_etypes
-from xml_jstatutree.jstatutree.kvsdict import KVSDict, KVSPrefixDict, KVSValuesCounter
-
-import plyvel
 import os
-from concurrent.futures import ThreadPoolExecutor
 import itertools
 from gensim.models.doc2vec import Doc2Vec
 from gensim.models.doc2vec import TaggedDocument
@@ -20,24 +11,24 @@ from layers import *
 from scored_pair import *
 
 if __name__ == "__main__":
-    from xml_jstatutree.xml_etypes import Law, Article, ArticleCaption, Paragraph, Sentence
+    from jstatutree.mltree.ml_etypes import Law, Article, ArticleCaption, Paragraph, Sentence
     from time import time
 
     BASEPATH = os.path.abspath(os.path.dirname(__file__))
-    RESULTPATH = os.path.join(BASEPATH, "aichi-aichi_pref")
+    RESULTPATH = os.path.join(BASEPATH, "all-aichi_pref")
     REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
     LEVELS = [Law, Article, Sentence]
 
     def setup_dataset(source_path, dbpath, levels):
         print("setup", dbpath)
-        dataset = HierarchicalDataset(dbpath=dbpath, levels=levels, only_reiki=True, only_sentence=True)
+        dataset = HierarchicalDataset(dbpath=dbpath, dataset_name="LAS", levels=levels, only_reiki=True, only_sentence=True)
         t = time()
-        dataset.register(source_path)
+        dataset.register_directory(source_path, overwrite=False)
         """
         print("reg time:", time() - t)
-        print("len treedict", len(dataset.statutree_dict))
+        print("len law", len(dataset["lawdata"]))
         for l in dataset.levels:
-            print("len sentencedict({})".format(l.__name__), len(dataset.sentence_dict[l]))
+            print("len sentencedict({})".format(l.__name__), len(dataset["texts"][l]))
         """
         return dataset
 
@@ -45,9 +36,9 @@ if __name__ == "__main__":
     TESTSET_DBPATH = os.path.join(BASEPATH, "aichi_pref_all.ldb")
     TRAININGSET_PATH = os.path.join(REIKISET_PATH, "")
     TRAININGSET_DBPATH = os.path.join(BASEPATH, "japan_all.ldb")
-
-    #testset = setup_dataset(TESTSET_PATH, TESTSET_DBPATH, LEVELS)
+    testset = setup_dataset(TESTSET_PATH, TESTSET_DBPATH, LEVELS)
     trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
+    """
     sentences = [
         "{rank},{count}".format(rank=i+1, count=count, sentence=sentence)
         for i, count  in enumerate(sorted(KVSValuesCounter(trainingset.sentence_dict[Sentence]).values(), key=lambda x: -x))
@@ -55,7 +46,7 @@ if __name__ == "__main__":
 
     with open("sentence_count_jreiki_all_onlydata.csv", "w") as f:
         f.write("\n".join(sentences))
-    """
+
     with open("sentence_count_jreiki_100000.csv", "w") as f:
         f.write("\n".join(sentences[:100000]))
 
@@ -65,18 +56,18 @@ if __name__ == "__main__":
     with open("sentence_count_jreiki_1000.csv", "w") as f:
         f.write("\n".join(sentences[:1000]))
     """
-    exit()
+    #exit()
 
-    for i in [100, 200, 300, 400, 500]:
+    for i in [100, 200, 300, 400, 500 , 600, 700]:
         SAMPLE_NUM = i
-        testpairs = list(itertools.combinations(list(testset.sentence_dict[Law].keys())[:SAMPLE_NUM], 2))
+        testpairs = list(itertools.combinations(list(testset["texts"][Law].keys())[:SAMPLE_NUM], 2))
         testpairskvs = LeveledScoredPairKVS(os.path.join(RESULTPATH, "DDD{}".format(SAMPLE_NUM)), LEVELS)
         testpairskvs[LEVELS[0]].add_by_iterable_pairs(testpairs)
 
         hmodels = HierarchicalModel(trainingset)
-        hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, "aichi_LawD2V.model"), threshold=0.3)
-        hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, "aichi_ArticleD2V.model"), threshold=0.4)
-        hmodels.set_layer(Sentence, Doc2VecLayer, os.path.join(BASEPATH, "aichi_SentenceD2V.model"), threshold=0.5)
+        hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, "all_LawD2V.model"), threshold=0.3)
+        hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, "all_ArticleD2V.model"), threshold=0.4)
+        hmodels.set_layer(Sentence, Doc2VecLayer, os.path.join(BASEPATH, "all_SentenceD2V.model"), threshold=0.7)
         hmodels.batch_training()
         hmodels.refine_pairs(testset, testpairskvs)
 
@@ -86,9 +77,9 @@ if __name__ == "__main__":
         testpairskvs[LEVELS[0]].add_by_iterable_pairs(testpairs)
 
         hmodels = HierarchicalModel(trainingset)
-        hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, "aichi_LawD2V.model"), threshold=None)
-        hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, "aichi_ArticleD2V.model"), threshold=None)
-        hmodels.set_layer(Sentence, Doc2VecLayer, os.path.join(BASEPATH, "aichi_SentenceD2V.model"), threshold=0.5)
+        hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, "all_LawD2V.model"), threshold=None)
+        hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, "all_ArticleD2V.model"), threshold=None)
+        hmodels.set_layer(Sentence, Doc2VecLayer, os.path.join(BASEPATH, "all_SentenceD2V.model"), threshold=0.7)
         hmodels.batch_training()
         hmodels.refine_pairs(testset, testpairskvs)
 

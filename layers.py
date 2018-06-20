@@ -7,7 +7,13 @@ import numpy as np
 import pickle
 import editdistance
 
-class MethodLayerBase(object):
+class LayerBase(object):
+    def refine_scored_pairs(self, scored_pairs, threshold):
+        for k1, k2, _ in scored_pairs:                 
+            score = self.compare(k1, k2)
+            scored_pairs.add_scored_pair(k1, k2, score)
+
+class MethodLayerBase(LayerBase):
     def __init__(self, dataset, level):
         self.dataset = dataset
         self.level = level
@@ -19,7 +25,7 @@ class MethodLayerBase(object):
     def is_model(self):
         return False
 
-class ModelLayerBase(object):
+class ModelLayerBase(LayerBase):
     def __init__(self, level, savepath):
         self.level = level
         self.savepath = savepath
@@ -44,6 +50,9 @@ class ModelLayerBase(object):
     def is_model(self):
         return True
 
+    def __str__(self):
+        return self.__class__.__name__
+
 class Doc2VecLayer(ModelLayerBase):
     def train(self, dataset):
         self.model = Doc2Vec(
@@ -57,6 +66,9 @@ class Doc2VecLayer(ModelLayerBase):
 
     def compare(self, elem1, elem2):
         return self.model.docvecs.similarity(elem1, elem2)
+
+    def __str__(self):
+        return "Doc2Vec model"
 
 class TfidfLayer(ModelLayerBase):
     def train(self, dataset):

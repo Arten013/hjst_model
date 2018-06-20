@@ -1,4 +1,4 @@
-from xml_jstatutree.jstatutree.kvsdict import KVSDict, KVSPrefixDict
+from jstatutree.kvsdict import KVSDict
 
 import os
 import itertools

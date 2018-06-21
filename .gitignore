@@ -108,5 +108,7 @@ venv.bak/
 
 .ldb
 *.ldb/
-.csv
-.model
+*.csv
+*.model
+
+results

@@ -5,10 +5,9 @@ from gensim.models.doc2vec import TaggedDocument
 import pickle
 from copy import copy
 
-from hierarchical_dataset import *
-from hierarchical_model import *
-from layers import *
-from scored_pair import *
+from hjst_model.hierarchical_dataset import *
+from hjst_model.hierarchical_model import *
+from hjst_model.layers import *
 
 def setup_dataset(source_path, dbpath, levels):
     print("setup", dbpath)
@@ -26,17 +25,17 @@ if __name__ == "__main__":
     from time import time
 
     BASEPATH = os.path.abspath(os.path.dirname(__file__))
-    RESULTPATH = os.path.join(BASEPATH, "all-aichi_pref")
-    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
+    RESULTPATH = os.path.join(BASEPATH, 'results/hjst_model', "all-aichi_pref")
+    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/23/230006")
     LEVELS = [Law, Article, Sentence]
 
     TRAININGSET_PATH = os.path.join(REIKISET_PATH, "")
-    TRAININGSET_DBPATH = os.path.join(BASEPATH, "japan_all.ldb")
+    TRAININGSET_DBPATH = os.path.join(BASEPATH, 'dataset', "japan_all.ldb")
     trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
 
     hmodels = HierarchicalModel(trainingset)
-    hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, "all_LawD2V.model"), threshold=0.3)
-    hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, "all_ArticleD2V.model"), threshold=0.4)
-    hmodels.set_layer(Sentence, Doc2VecLayer, os.path.join(BASEPATH, "all_SentenceD2V.model"), threshold=0.7)
+    hmodels.set_layer(Law, Doc2VecLayer, os.path.join(BASEPATH, 'models', "all_LawD2V.model"), threshold=0.3)
+    hmodels.set_layer(Article, Doc2VecLayer, os.path.join(BASEPATH, 'models', "all_ArticleD2V.model"), threshold=0.4)
+    hmodels.set_layer(Sentence, Doc2VecLayer, os.path.join(BASEPATH, 'models', "all_SentenceD2V.model"), threshold=0.7)
     hmodels.batch_training()
 

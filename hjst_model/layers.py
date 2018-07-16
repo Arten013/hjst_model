@@ -9,7 +9,7 @@ import editdistance
 
 class LayerBase(object):
     def refine_scored_pairs(self, scored_pairs, threshold):
-        for k1, k2, _ in scored_pairs:                 
+        for k1, k2, _ in scored_pairs:
             score = self.compare(k1, k2)
             scored_pairs.add_scored_pair(k1, k2, score)
 

@@ -27,13 +27,18 @@ if __name__ == "__main__":
     BASEPATH = os.path.abspath(os.path.dirname(__file__))
     RESULTBASEPATH = os.path.join(BASEPATH, 'results/hjst_model')
     RESULTPATH = os.path.join(RESULTBASEPATH, "all-aichi_pref")
-    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/23/230006")
+    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/23/")
     LEVELS = [Law, Article, Sentence]
 
     TRAININGSET_PATH = os.path.join(REIKISET_PATH, "")
     TRAININGSET_DBPATH = os.path.join(RESULTBASEPATH, 'dataset', "japan_all.ldb")
     trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
 
+    from time import sleep
+    for t, s in trainingset.iter_tagged_sentence(Law):
+        print(t)
+    sleep(30)
+    exit()
     hmodels = HierarchicalModel(trainingset)
     hmodels.set_layer(Law, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "all_LawD2V.model"), threshold=0.3)
     hmodels.set_layer(Article, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "all_ArticleD2V.model"), threshold=0.4)

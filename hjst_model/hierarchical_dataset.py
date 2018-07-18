@@ -25,10 +25,10 @@ class Morph(object):
         self.tagger.parse('')
 
     def iter_surface(self, text):        
-        self.morph_list = self.tagger.parseToNode(text)
-        while self.morph_list:
-            yield self.morph_list.surface
-            self.morph_list = self.morph_list.next
+        morph_list = self.tagger.parseToNode(text)
+        while morph_list:
+            yield morph_list.surface
+            morph_list = morph_list.next
 
     def surfaces(self, text):
         return list(self.iter_surface(text))
@@ -103,7 +103,8 @@ class HierarchicalDataset(JStatutreeKVS):
         self.is_empty = False
 
     def iter_tagged_sentence(self, level):
-        yield from ((t, self.preprocess(s)) for t, s in self.self.kvsdicts["texts"][level].items())
+        yield from ((t, self.preprocess(s)) for t, s in self.kvsdicts["texts"][level].items())
+
 
     def iter_gensim_tagged_documents(self, level):
         yield from (TaggedDocument(self.preprocess(s), [t]) for t, s in self.kvsdicts["texts"][level].items())

@@ -7,6 +7,9 @@ from copy import copy
 import numpy as np
 import pickle
 import editdistance
+import multiprocessing
+
+
 
 class LayerBase(object):
     def refine_scored_pairs(self, scored_pairs, threshold):
@@ -60,11 +63,25 @@ class Doc2VecLayer(ModelLayerBase):
         self.model = Doc2Vec(
             documents = dataset.iter_gensim_tagged_documents(self.level),
             dm = 1,
-            vector_size=300,
-            window=8,
+            vector_size=500,
+            window=4,
             min_count=10,
-            workers=4
+            workers=multiprocessing.cpu_count()
             )
+
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
+            layer = pickle.load(f)
+        layer.model = Doc2Vec.load(os.path.join(path, 'model_body'))
+        return layer
+
+    def save(self):
+        os.makedirs(self.savepath)
+        self.model.save(os.path.join(self.savepath, 'model_body'))
+        del self.model
+        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
+            pickle.dump(self, f)
 
     def compare(self, elem1, elem2):
         return self.model.docvecs.similarity(elem1, elem2)

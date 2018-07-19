@@ -13,8 +13,8 @@ def setup_dataset(source_path, dbpath, levels):
     print("setup", dbpath)
     dataset = HierarchicalDataset(dbpath=dbpath, dataset_name="LAS", levels=levels, only_reiki=True, only_sentence=True)
     t = time()
-    """
     dataset.register_directory(source_path, overwrite=False)
+    """
     print("reg time:", time() - t)
     print("len law", len(dataset["lawdata"]))
     for l in dataset.levels:
@@ -27,9 +27,9 @@ if __name__ == "__main__":
     from time import time
 
     BASEPATH = os.path.abspath(os.path.dirname(__file__))
-    RESULTBASEPATH = os.path.join(BASEPATH, 'results/hjst_model')
+    RESULTBASEPATH = os.path.join(BASEPATH, 'results/hjst_model/test')
     RESULTPATH = os.path.join(RESULTBASEPATH, "all-aichi_pref")
-    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
+    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/23/230006")
     LEVELS = [Law, Article, Sentence]
 
     TRAININGSET_PATH = os.path.join(REIKISET_PATH, "")

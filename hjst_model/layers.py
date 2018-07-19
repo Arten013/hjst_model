@@ -1,4 +1,5 @@
 from gensim.models.doc2vec import Doc2Vec
+import os
 from gensim.models.doc2vec import TaggedDocument
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -32,6 +33,7 @@ class ModelLayerBase(LayerBase):
         self.model = None
 
     def save(self):
+        os.makedirs(os.path.dirname(self.savepath), exist_ok=True)
         with open(self.savepath, "wb") as f:
             pickle.dump(self, f)
 
@@ -56,7 +58,7 @@ class ModelLayerBase(LayerBase):
 class Doc2VecLayer(ModelLayerBase):
     def train(self, dataset):
         self.model = Doc2Vec(
-            documents = list(dataset.iter_gensim_tagged_documents(self.level)),
+            documents = dataset.iter_gensim_tagged_documents(self.level),
             dm = 1,
             vector_size=300,
             window=8,

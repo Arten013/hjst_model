@@ -105,9 +105,20 @@ class HierarchicalDataset(JStatutreeKVS):
     def iter_tagged_sentence(self, level):
         yield from ((t, self.preprocess(s)) for t, s in self.kvsdicts["texts"][level].items())
 
-
     def iter_gensim_tagged_documents(self, level):
-        yield from (TaggedDocument(self.preprocess(s), [t]) for t, s in self.kvsdicts["texts"][level].items())
+        return DatasetGensimGenerator(kvsdict=self.kvsdicts['texts'][level], preprocess=self.preprocess)
 
     def preprocess(self, sentence):
         return self.morph_separator.surfaces(sentence)
+
+class DatasetGensimGenerator(object):
+    def __init__(self, kvsdict, preprocess):
+        self.kvsdict = kvsdict
+        self.preprocess = preprocess
+
+    def __iter__(self):
+        self.gen = (TaggedDocument(self.preprocess(s), [t]) for t, s in self.kvsdict.items())
+        return self
+
+    def __next__(self):
+        return  next(self.gen)

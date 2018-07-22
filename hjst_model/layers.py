@@ -1,4 +1,6 @@
 from gensim.models.doc2vec import Doc2Vec
+from gensim.models.word2vec import Word2Vec
+import re
 import os
 from gensim.models.doc2vec import TaggedDocument
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -57,6 +59,71 @@ class ModelLayerBase(LayerBase):
 
     def __str__(self):
         return self.__class__.__name__
+import numpy as np
+class WVAverageModel(object):
+    def __init__(self, wvmodel):
+        self.wvmodel = wvmodel
+        self.text_id_dict = dict()
+    def train(self, tagged_texts):
+        self.vecs = np.array(
+                [self._calc_vec(self._reg_text_id(tag, i), text) for i, (tag, text) in enumerate(tagged_texts)]
+            )
+
+    def save(self, path):
+        os.makedirs(path)
+        np.save(os.path.join(path, 'text_vectors.npy'), self.vecs, allow_pickle=False)
+        tmp_vecs = self.vecs
+        self.vecs = None
+        self.wvmodel.save(os.path.join(path, 'wvmodel.model'))
+        tmp_wvmodel = self.wvmodel
+        self.wvmodel = None
+        with open(os.path.join(path, 'model_class.cls'), "wb") as f:
+            pickle.dump(self, f)
+        self.vecs = tmp_vecs
+        self.wvmodel = tmp_wvmodel
+
+    def _reg_text_id(self, tag, text_id):
+        self.text_id_dict[tag] = text_id
+        return text_id
+
+    def _calc_vec(self, text_id, text):
+        return np.average(np.array([self.wvmodel.wv[v] if v in self.wvmodel.wv else np.zeros(self.wvmodel.wv.vector_size) for v in text]))
+
+class WVAverageLayer(ModelLayerBase):
+    def train(self, dataset):
+        dataset.set_iterator_mode(self.level, tag=False, sentence=True)
+        wv = Word2Vec(
+                sentences = dataset,
+                size = 500,
+                window = 4,
+                min_count=10,
+                workers=multiprocessing.cpu_count()
+                )
+        dataset.set_iterator_mode(self.level, tag=True, sentence=True)
+        self.model = WVAverageModel(wv)
+        self.model.train(dataset)
+
+    def save(self):
+        os.makedirs(self.savepath)
+        self.model.save(os.path.join(self.savepath, 'model_body'))
+        model = self.model
+        self.model = None
+        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
+            pickle.dump(self, f)
+        self.model = model
+
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
+            layer = pickle.load(f)
+        layer.model = WVAverageModel.load(os.path.join(path, 'model_body'))
+        return layer
+
+    def compare(self, elem1, elem2):
+        return np.dot(self.vecs[self.text_id_dict[elem1]], self.vecs[self.text_id_dict[elem2]])
+
+    def __str__(self):
+        return "Word Embedding Average Model"
 
 class Doc2VecLayer(ModelLayerBase):
     def train(self, dataset):
@@ -79,9 +146,11 @@ class Doc2VecLayer(ModelLayerBase):
     def save(self):
         os.makedirs(self.savepath)
         self.model.save(os.path.join(self.savepath, 'model_body'))
-        del self.model
+        model = self.model
+        self.model = None
         with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
             pickle.dump(self, f)
+        self.model = model
 
     def compare(self, elem1, elem2):
         return self.model.docvecs.similarity(elem1, elem2)

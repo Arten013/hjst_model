@@ -102,6 +102,25 @@ class HierarchicalDataset(JStatutreeKVS):
                 #print(e)
         self.is_empty = False
 
+    def set_iterator_mode(self, level, tag=None, sentence=None):
+        self.itermode_level = level
+        self.itermode_tag = tag if tag is not None else self.__dict__.get('itermode_tag', True)
+        self.itermode_sentence = sentence if sentence is not None else self.__dict__.get('itermode_sentence', True)
+
+    def __iter__(self):
+        assert self.__dict__.get('itermode_level', False), 'You must call set_iterator_mode before call iterator'
+        if self.itermode_tag and self.itermode_sentence:
+            self.generator = map(lambda x: (x[0], self.preprocess(x[1])), self.kvsdicts['texts'][self.itermode_level].items())
+        elif self.itermode_sentence:
+            self.generator = map(lambda x: self.preprocess(x), self.kvsdicts['texts'][self.itermode_level].values())
+        elif self.itermode_tag:
+            self.generator = self.kvsdicts.keys()
+        else:
+            self.generator = (x for x in [])
+        return self
+
+    def __next__(self):
+        return next(self.generator)
     def iter_tagged_sentence(self, level):
         yield from ((t, self.preprocess(s)) for t, s in self.kvsdicts["texts"][level].items())
 

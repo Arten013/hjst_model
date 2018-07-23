@@ -87,7 +87,17 @@ class WVAverageModel(object):
         return text_id
 
     def _calc_vec(self, text_id, text):
-        return np.average(np.array([self.wvmodel.wv[v] if v in self.wvmodel.wv else np.zeros(self.wvmodel.wv.vector_size) for v in text]))
+        return np.average(np.array([self.wvmodel.wv[v] if v in self.wvmodel.wv else np.zeros(self.wvmodel.wv.vector_size) for v in text]), axis=0)
+
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
+            self = pickle.load(f)
+        self.vecs = np.load(os.path.join(path, 'text_vectors.npy'))
+        return self
+
+    def load_wvmodel(self, model_path):
+        self.wvmodel = Word2Vec.load(model_path)
 
 class WVAverageLayer(ModelLayerBase):
     def train(self, dataset):

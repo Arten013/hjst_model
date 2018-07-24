@@ -60,40 +60,46 @@ class ModelLayerBase(LayerBase):
     def __str__(self):
         return self.__class__.__name__
 import numpy as np
+from jstatutree import kvsdict
 class WVAverageModel(object):
-    def __init__(self, wvmodel):
+    def __init__(self, wvmodel, savepath):
         self.wvmodel = wvmodel
-        self.text_id_dict = dict()
-    def train(self, tagged_texts):
-        self.vecs = np.array(
-                [self._calc_vec(self._reg_text_id(tag, i), text) for i, (tag, text) in enumerate(tagged_texts)]
-            )
+        self.savepath = savepath
+        os.makedirs(self.savepath, exist_ok=True)
+        self.init_vecs()
 
-    def save(self, path):
-        os.makedirs(path)
-        np.save(os.path.join(path, 'text_vectors.npy'), self.vecs, allow_pickle=False)
-        tmp_vecs = self.vecs
-        self.vecs = None
-        self.wvmodel.save(os.path.join(path, 'wvmodel.model'))
+    def init_vecs(self):
+        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
+        
+
+    def train(self, tagged_texts):
+        with self.vecs.write_batch() as wb:
+            for tag, text in tagged_texts:
+                self.vecs[tag] = self._calc_vec(text)
+
+    def save(self):
+        self.wvmodel.save(os.path.join(self.savepath, 'wvmodel.model'))
         tmp_wvmodel = self.wvmodel
         self.wvmodel = None
-        with open(os.path.join(path, 'model_class.cls'), "wb") as f:
+        del self.vecs
+        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
             pickle.dump(self, f)
-        self.vecs = tmp_vecs
+        self.init_vecs()
         self.wvmodel = tmp_wvmodel
 
-    def _reg_text_id(self, tag, text_id):
-        self.text_id_dict[tag] = text_id
-        return text_id
-
-    def _calc_vec(self, text_id, text):
-        return np.average(np.array([self.wvmodel.wv[v] if v in self.wvmodel.wv else np.zeros(self.wvmodel.wv.vector_size) for v in text]), axis=0)
+    def _calc_vec(self, text):
+        arr = np.array(
+                [self.wvmodel.wv[v] for v in text if v in self.wvmodel.wv]
+                )
+        if arr.shape == np.array([]).shape:
+            return zeros(self.wvmodel.wv.shape[0])
+        return np.average(arr, axis=0)
 
     @classmethod
     def load(cls, path):
         with open(os.path.join(path, 'model_class.cls'), "rb") as f:
             self = pickle.load(f)
-        self.vecs = np.load(os.path.join(path, 'text_vectors.npy'))
+        self.init_vecs()
         return self
 
     def load_wvmodel(self, model_path):
@@ -110,12 +116,11 @@ class WVAverageLayer(ModelLayerBase):
                 workers=multiprocessing.cpu_count()
                 )
         dataset.set_iterator_mode(self.level, tag=True, sentence=True)
-        self.model = WVAverageModel(wv)
+        self.model = WVAverageModel(wv, os.path.join(self.savepath, 'model_body'))
         self.model.train(dataset)
 
     def save(self):
-        os.makedirs(self.savepath)
-        self.model.save(os.path.join(self.savepath, 'model_body'))
+        self.model.save()
         model = self.model
         self.model = None
         with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
@@ -130,7 +135,7 @@ class WVAverageLayer(ModelLayerBase):
         return layer
 
     def compare(self, elem1, elem2):
-        return np.dot(self.vecs[self.text_id_dict[elem1]], self.vecs[self.text_id_dict[elem2]])
+        return np.dot(self.vecs[elem1], self.vecs[elem2])
 
     def __str__(self):
         return "Word Embedding Average Model"

@@ -52,7 +52,7 @@ class HierarchicalGraphDataset(object):
     def set_data(self, path):
         reader =xml_lawdata.ReikiXMLReader(path)
         if self.gdb.load_lawdata(reader.lawdata.municipality_code, reader.lawdata.file_code) is not None:
-            print('skip(exists): '+str(reader.lawdata.name) )
+            return 'skip(exists): '+str(reader.lawdata.name)
         reader.open()
         if reader.is_closed():
             return 'skip(cannot open): '+str(reader.lawdata.name)
@@ -67,6 +67,7 @@ class HierarchicalGraphDataset(object):
 
 from jstatutree.xmltree import xml_etypes
 from time import time
+import traceback
 def register_directory(usr, pw, url, levels, basepath, workers=3):
     def split_list(alist, wanted_parts=1):
         length = len(alist)
@@ -77,9 +78,11 @@ def register_directory(usr, pw, url, levels, basepath, workers=3):
         futures = [proc_exec.submit(register_from_pathlist, pathlist=path_lists[i], usr=usr, pw=pw, url=url, levels=levels) for i in range(workers)]
         for future in concurrent.futures.as_completed(futures):
             try:
-                print(future.result())
-            except Exception as exc:
-                print('%s' % (exc,))
+                #print(future.result())
+                pass
+            except Exception:
+                # traceback.print_exc()
+                pass
 
 def register_from_pathlist(pathlist, *hgd_arg, **hgd_kwargs):
     dataset = HierarchicalGraphDataset(*hgd_arg, **hgd_kwargs)
@@ -87,19 +90,16 @@ def register_from_pathlist(pathlist, *hgd_arg, **hgd_kwargs):
         futures = [executor.submit(dataset.set_data, path) for path in pathlist]
         for future in concurrent.futures.as_completed(futures):
             try:
-                print(future.result())
-            except Exception as exc:
-                print('%s' % (exc,))
+                # print(future.result())
+                pass
+            except Exception:
+                # traceback.print_exc()
+                pass
 
 BASEPATH = os.path.abspath(os.path.dirname(__file__))
 REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
-t = time()
-register_directory(usr='neo4j', pw='pass', url='http://0.0.0.0:7474', levels=[xml_etypes.Law, xml_etypes.Article, xml_etypes.Sentence], basepath=os.path.join(REIKISET_PATH, '23/'))
-print('23:', time()-t)
-t = time()
-exit()
-dataset.register_directory(os.path.join(REIKISET_PATH, '24'))
-print('24:', time()-t)
-t = time()
-dataset.register_directory(os.path.join(REIKISET_PATH, '25'))
-print('25:', time()-t)
+for i in range(47):
+    t = time()
+    register_directory(usr='neo4j', pw='pass', url='http://127.0.0.1:7474', levels=[xml_etypes.Law, xml_etypes.Article, xml_etypes.Sentence], basepath=os.path.join(REIKISET_PATH, '{0:02}'.format(i+1)))
+    print(str(i+1), ':', time()-t)
+    t = time()

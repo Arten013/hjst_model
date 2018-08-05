@@ -183,7 +183,7 @@ class GraphDatasetConfig(graph_lawdata.DBConfig):
         dataset = HierarchicalGraphDataset.init_by_config(self)
         if registering:
             print('reg:', self.dataset_path)
-            # graph_lawdata.register_directory(levels=self['levels'], basepath=self.dataset_path, loginkey=self.loginkey, workers=workers, only_reiki=self['only_reiki'], only_sentence=['only_sentence'])
+            graph_lawdata.register_directory(levels=self['levels'], basepath=self.dataset_path, loginkey=self.loginkey, workers=workers, only_reiki=self['only_reiki'], only_sentence=['only_sentence'])
             dataset.add_government(self['root_code'])
         return dataset
 

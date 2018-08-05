@@ -1,8 +1,7 @@
 import os
 import itertools
 from gensim.models.doc2vec import Doc2Vec
-from gensim.models.doc2vec import TaggedDocument
-import pickle
+from gensim.models.doc2vec import TaggedDocument import pickle
 from copy import copy
 
 from hierarchical_dataset import *

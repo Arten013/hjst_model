@@ -39,62 +39,19 @@ class Morph(object):
     def surfaces(self, text):
         return list(self.iter_surface(text))
 
-from jstatutree.graphtree import graph_etypes, graph_lawdata
-import concurrent
-class HierarchicalGraphDataset(object):
-    def __init__(self, usr, pw, url, levels='ALL', only_reiki=True, only_sentence=False, *args, **kwargs):
-        self.only_reiki = only_reiki
-        self.only_sentence = only_sentence
-        self.gdb = graph_lawdata.ReikiGDB(usr=usr, pw=pw, url=url)
-        self.morph_separator = Morph()
-        self.levels = levels
 
-    def set_data(self, path):
-        reader =xml_lawdata.ReikiXMLReader(path)
-        if self.gdb.load_lawdata(reader.lawdata.municipality_code, reader.lawdata.file_code) is not None:
-            return 'skip(exists): '+str(reader.lawdata.name)
-        reader.open()
-        if reader.is_closed():
-            return 'skip(cannot open): '+str(reader.lawdata.name)
-        if not self.only_reiki or reader.lawdata.is_reiki():
-            self.gdb.set_from_reader(reader, levels=self.levels)
-            reader.close()
-            return 'register: '+str(reader.lawdata.name)
-        else:
-            reader.close()
-            return 'skip(not reiki): '+str(reader.lawdata.name)
+class DatasetGensimGenerator(object):
+    def __init__(self, kvsdict, preprocess):
+        self.kvsdict = kvsdict
+        self.preprocess = preprocess
 
+    def __iter__(self):
+        self.gen = (TaggedDocument(self.preprocess(s), [t]) for t, s in self.kvsdict.items())
+        return self
 
-from jstatutree.xmltree import xml_etypes
-from time import time
-import traceback
-def register_directory(usr, pw, url, levels, basepath, workers=3):
-    def split_list(alist, wanted_parts=1):
-        length = len(alist)
-        return [ alist[i*length // wanted_parts: (i+1)*length // wanted_parts] 
-                for i in range(wanted_parts) ]
-    path_lists = split_list(list(find_all_files(basepath, [".xml"])), workers)
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as proc_exec:
-        futures = [proc_exec.submit(register_from_pathlist, pathlist=path_lists[i], usr=usr, pw=pw, url=url, levels=levels) for i in range(workers)]
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                #print(future.result())
-                pass
-            except Exception:
-                # traceback.print_exc()
-                pass
+    def __next__(self):
+        return  next(self.gen)
 
-def register_from_pathlist(pathlist, *hgd_arg, **hgd_kwargs):
-    dataset = HierarchicalGraphDataset(*hgd_arg, **hgd_kwargs)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(dataset.set_data, path) for path in pathlist]
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                # print(future.result())
-                pass
-            except Exception:
-                # traceback.print_exc()
-                pass
 
 BASEPATH = os.path.abspath(os.path.dirname(__file__))
 REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")

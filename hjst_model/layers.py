@@ -75,6 +75,9 @@ class WVAverageModel(object):
     def train(self, tagged_texts):
         with self.vecs.write_batch() as wb:
             for tag, text in tagged_texts:
+                if not isinstance(tag, str):
+                    print('WARNING: text tag is not str (type {})'.format(type(tag)))
+                    tag = str(tag)
                 self.vecs[tag] = self._calc_vec(text)
 
     def save(self):
@@ -92,7 +95,7 @@ class WVAverageModel(object):
                 [self.wvmodel.wv[v] for v in text if v in self.wvmodel.wv]
                 )
         if arr.shape == np.array([]).shape:
-            return zeros(self.wvmodel.wv.shape[0])
+            return np.zeros(self.wvmodel.wv.vector_size)
         return np.average(arr, axis=0)
 
     @classmethod

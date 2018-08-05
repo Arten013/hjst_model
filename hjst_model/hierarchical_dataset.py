@@ -1,11 +1,17 @@
 from jstatutree.mltree.ml_lawdata import JStatutreeKVS
-from jstatutree.xmltree import xml_lawdata
+from jstatutree.mltree import ml_etypes
+from jstatutree.xmltree import xml_lawdata, xml_etypes
+from jstatutree.graphtree import graph_etypes, graph_lawdata
 from jstatutree.myexceptions import *
 from jstatutree.etypes import sort_etypes
 from jstatutree.kvsdict import KVSDict
 from gensim.models.doc2vec import TaggedDocument
-from jstatutree.mltree import ml_etypes
 
+import multiprocessing
+from neo4jrestclient.client import Node
+from time import time
+import traceback
+import concurrent
 import plyvel
 import os
 import MeCab
@@ -130,6 +136,130 @@ class HierarchicalDataset(JStatutreeKVS):
     def preprocess(self, sentence):
         return self.morph_separator.surfaces(sentence)
 
+class GraphDatasetConfig(graph_lawdata.DBConfig):
+    CONF_ENCODERS = {
+            'levels': lambda l: ','.join([x if isinstance(x, str) else x.__name__ for x in l]),
+            }
+    CONF_DECODERS = {
+            'levels': lambda l: [getattr(graph_etypes, x) for x in l.split(',')],
+            'only_sentence': lambda x: x == 'True',
+            'only_reiki': lambda x: x == 'True',
+            }
+
+    def __init__(self, levels, dataset_basepath, result_basepath, path=None, only_reiki=True, only_sentence=True):
+        super().__init__(path)
+        self['levels'] = [l.capitalize() if isinstance(l, str) else l.__name__ for l in levels]
+        self['only_reiki'] = only_reiki
+        self['only_sentence'] = only_sentence
+        self['dataset_basepath'] = os.path.abspath(dataset_basepath)
+        self['result_basepath'] = os.path.abspath(result_basepath)
+
+    def __getitem__(self, key):
+        return self.CONF_DECODERS.get(key, str)(self.section[key])
+
+    def __setitem__(self, key, value):
+        self.section[key] = self.CONF_ENCODERS.get(key, str)(value)
+
+    def add_dataset(self, name, root_code, exist_ok=True):
+        assert not (exist_ok and self.parser.has_section(name)), 'Dataset {} has already existed.'.format(name)
+        self.change_section(name, create_if_missing=True)
+        self.section['root_code'] = root_code
+
+    def set_dataset(self, name):
+        assert self.parser.has_section(name), 'Dataset {} does not exist.'.format(name)
+        self.change_section(name, create_if_missing=False)
+
+    @property
+    def dataset_path(self):
+        root_code = self['root_code'] if len(self['root_code']) == 2 else self['root_code'][:2]+'/'+self['root_code']
+        return os.path.join(self['dataset_basepath'], root_code)
+
+    @property
+    def result_path(self):
+        return os.path.join(self['result_basepath'], self.section.name)
+
+    def prepare_dataset(self, registering=True, workers=multiprocessing.cpu_count()):
+        assert self.section.name != 'DEFAULT', 'You must set dataset before get hgd instance'
+        dataset = HierarchicalGraphDataset.init_by_config(self)
+        if registering:
+            print('reg:', self.dataset_path)
+            # graph_lawdata.register_directory(levels=self['levels'], basepath=self.dataset_path, loginkey=self.loginkey, workers=workers, only_reiki=self['only_reiki'], only_sentence=['only_sentence'])
+            dataset.add_government(self['root_code'])
+        return dataset
+
+class HierarchicalGraphDataset(object):
+    def __init__(self, loginkey, dataset_name, levels='ALL', only_reiki=True, only_sentence=False, *args, **kwargs):
+        self.only_reiki = only_reiki
+        self.only_sentence = only_sentence
+        self.gdb = graph_lawdata.ReikiGDB(**loginkey)
+        self.morph_separator = Morph()
+        self.levels = levels
+        self.name= dataset_name
+        try:
+            self.root_codes = [node['code'] for node in self.gdb.db.labels.get(self.name).all()]
+        except KeyError:
+            self.root_codes = []
+
+    @classmethod
+    def init_by_config(cls, config):
+        return cls(
+                    loginkey=config.loginkey,
+                    dataset_name=config.section.name,
+                    levels=config['levels'],
+                    only_reiki=config['only_reiki'],
+                    only_sentence=config['only_reiki']
+                )
+
+    def add_government(self, govcode):
+        if len(govcode) == 2:
+            res = self.gdb.db.query("""MATCH (pref:Prefectures{code: '%s'})-[:PREF_OF]->(muni:Municipalities) SET muni:%s RETURN muni.code""" % (govcode, self.name))
+            self.root_codes.extend([i[0] for i in res])
+        else:
+            res = self.gdb.db.query("""MATCH (muni:Municipalities{code: '%s'}) SET muni:%s""" % (govcode, self.name))
+            self.root_codes.append(govcode)
+        self.root_codes = list(set(self.root_codes))
+
+    def set_iterator_mode(self, level, tag=None, sentence=None, gensim=None):
+        self.itermode_level = level
+        self.itermode_tag = tag if tag is not None else self.__dict__.get('itermode_tag', None)
+        self.itermode_sentence = sentence if sentence is not None else self.__dict__.get('itermode_sentence', None)
+        self.itermode_gensim = gensim if gensim is not None else self.__dict__.get('itermode_gensim', None)
+
+    def __iter__(self):
+        assert self.__dict__.get('itermode_level', False), 'You must call set_iterator_mode before call iterator'
+        def get_element_nodes(code):
+            level_label = (self.itermode_level.capitalize() if isinstance(self.itermode_level, str) else self.itermode_level.__name__) + 's'
+            ret = [{'fullname': i[0], 'fulltext': i[1]} for i in self.gdb.db.query("""MATCH (muni:Municipalities{code: '%s'})-[]->(:Statutories)-[*1..]->(elem:%s) RETURN elem.fullname, elem.fulltext""" % (code, level_label), returns=(str, str))]
+            return ret
+        node_gen = (enode for enode_gen in (get_element_nodes(code) for code in self.root_codes) for enode in enode_gen)
+        
+        if self.itermode_tag and self.itermode_sentence:
+            if self.itermode_gensim:
+                self.generator = map(lambda x: TaggedDocument(tags=[x['fullname']], words=self.preprocess(x['fulltext'])), node_gen)
+            else:
+                self.generator = map(lambda x: (x['fullname'], self.preprocess(x['fulltext'])), node_gen)
+        elif self.itermode_sentence:
+            self.generator = map(lambda x: self.preprocess(x['fulltext']), node_gen)
+        elif self.itermode_tag:
+            self.generator = map(lambda x: x['fullname'], node_gen)
+        else:
+            self.generator = (x for x in [])
+        return self
+
+    def __next__(self):
+        return next(self.generator)
+
+    def iter_tagged_sentence(self, level):
+        self.set_iterator_mode(level, tag=True, sentence=True)
+        return self
+
+    def iter_gensim_tagged_documents(self, level):
+        self.set_iterator_mode(level, tag=True, sentence=True, gensim=True)
+        return self
+
+    def preprocess(self, sentence):
+        return self.morph_separator.surfaces(sentence)
+
 class DatasetGensimGenerator(object):
     def __init__(self, kvsdict, preprocess):
         self.kvsdict = kvsdict
@@ -141,3 +271,4 @@ class DatasetGensimGenerator(object):
 
     def __next__(self):
         return  next(self.gen)
+

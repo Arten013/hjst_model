@@ -11,7 +11,7 @@ from hjst_model.layers import *
 
 def setup_dataset(source_path, dbpath, levels):
     print("setup", dbpath)
-    dataset = HierarchicalDataset(dbpath=dbpath, dataset_name="LAS", levels=levels, only_reiki=True, only_sentence=True)
+    dataset = HierarchicalGraphDataset(dbpath=dbpath, dataset_name="LAS", levels=levels, only_reiki=True, only_sentence=True)
     t = time()
     dataset.register_directory(source_path, overwrite=False)
     """
@@ -23,29 +23,31 @@ def setup_dataset(source_path, dbpath, levels):
     return dataset
 
 if __name__ == "__main__":
-    from jstatutree.mltree.ml_etypes import *
+    from jstatutree.graphtree.graph_etypes import *
     from time import time
 
     BASEPATH = os.path.abspath(os.path.dirname(__file__))
     RESULTBASEPATH = os.path.join(BASEPATH, 'results/hjst_model/test')
-    RESULTPATH = os.path.join(RESULTBASEPATH, "all-aichi_pref")
-    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/23/230006")
+    # RESULTPATH = os.path.join(RESULTBASEPATH, "all-aichi_pref")
+    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
     LEVELS = [Law, Article, Sentence]
-
-    TRAININGSET_PATH = os.path.join(REIKISET_PATH, "")
-    TRAININGSET_DBPATH = os.path.join(RESULTBASEPATH, 'dataset', "aichi_pref_all.ldb")
-    trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
-    """
-    from time import sleep
-    for t, s in trainingset.iter_gensim_tagged_documents(Law):
-        #print(t)
-        pass
-    sleep(30)
-    exit()
-    """
+    TRAININGSET_PATH = os.path.join(REIKISET_PATH, "23")
+    # TRAININGSET_DBPATH = os.path.join(RESULTBASEPATH, 'dataset', "aichi_pref_all.ldb")
+    #trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
+    CONFPATH = './configs/testset.conf'
+    conf = GraphDatasetConfig(levels=LEVELS, dataset_basepath=REIKISET_PATH, result_basepath=RESULTBASEPATH, path=CONFPATH)
+    conf.set_logininfo(host='127.0.0.1')
+    # conf.update()
+    try:
+        conf.set_dataset('aichi')
+        trainingset = conf.prepare_dataset(registering=True)
+    except AssertionError:
+        conf.add_dataset('aichi', '23')
+        trainingset = conf.prepare_dataset()
+    conf.update()
     hmodels = HierarchicalModel(trainingset)
-    hmodels.set_layer(Law, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "all_LawD2V.model"), threshold=0.3)
-    hmodels.set_layer(Article, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "all_ArticleD2V.model"), threshold=0.4)
-    hmodels.set_layer(Sentence, WVAverageLayer, os.path.join(RESULTBASEPATH, 'layers', "all_SentenceWVA.model"), threshold=0.7)
+    hmodels.set_layer(Law, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "aichi_LawD2V.model"), threshold=0.3)
+    hmodels.set_layer(Article, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "aichi_ArticleD2V.model"), threshold=0.4)
+    hmodels.set_layer(Sentence, WVAverageLayer, os.path.join(RESULTBASEPATH, 'layers', "aichi_SentenceWVA.model"), threshold=0.7)
     hmodels.batch_training()
 

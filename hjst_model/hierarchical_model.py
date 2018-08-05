@@ -10,7 +10,7 @@ class HierarchicalModel(object):
         self.thresholds = dict()
 
     def set_layer(self, level, layer_cls, savepath, threshold=0.3):
-        assert level in self.levels, "This level is not in levels"+str(levels)
+        assert level in self.levels, "This level is not in levels"+str(level)
         if layer_cls.is_model():
             try:
                 self.layers[level] = layer_cls.load(savepath)

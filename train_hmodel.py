@@ -31,18 +31,18 @@ if __name__ == "__main__":
     # RESULTPATH = os.path.join(RESULTBASEPATH, "all-aichi_pref")
     REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
     LEVELS = [Law, Article, Sentence]
-    TRAININGSET_PATH = os.path.join(REIKISET_PATH, "23")
+    TRAININGSET_PATH = os.path.join(REIKISET_PATH, "23/230006")
     # TRAININGSET_DBPATH = os.path.join(RESULTBASEPATH, 'dataset', "aichi_pref_all.ldb")
     #trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
     CONFPATH = './configs/testset.conf'
-    conf = GraphDatasetConfig(levels=LEVELS, dataset_basepath=REIKISET_PATH, result_basepath=RESULTBASEPATH, path=CONFPATH)
+    conf = DatasetNEOConfig(levels=LEVELS, dataset_basepath=REIKISET_PATH, result_basepath=RESULTBASEPATH, path=CONFPATH)
     conf.set_logininfo(host='127.0.0.1')
     # conf.update()
     try:
-        conf.set_dataset('aichi')
+        conf.set_dataset('aichi_pref')
         trainingset = conf.prepare_dataset(registering=True)
     except AssertionError:
-        conf.add_dataset('aichi', '23')
+        conf.add_dataset('aichi_pref', '230006')
         trainingset = conf.prepare_dataset()
     conf.update()
     hmodels = HierarchicalModel(trainingset)

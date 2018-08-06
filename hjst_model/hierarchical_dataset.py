@@ -7,6 +7,7 @@ from jstatutree.etypes import sort_etypes
 from jstatutree.kvsdict import KVSDict
 from gensim.models.doc2vec import TaggedDocument
 
+from abconfig.abconfig import NEOConfig
 import multiprocessing
 from neo4jrestclient.client import Node
 from time import time
@@ -135,8 +136,7 @@ class HierarchicalDataset(JStatutreeKVS):
 
     def preprocess(self, sentence):
         return self.morph_separator.surfaces(sentence)
-
-class GraphDatasetConfig(graph_lawdata.DBConfig):
+class DatasetNEOConfig(NEOConfig):
     CONF_ENCODERS = {
             'levels': lambda l: ','.join([x if isinstance(x, str) else x.__name__ for x in l]),
             }
@@ -154,11 +154,6 @@ class GraphDatasetConfig(graph_lawdata.DBConfig):
         self['dataset_basepath'] = os.path.abspath(dataset_basepath)
         self['result_basepath'] = os.path.abspath(result_basepath)
 
-    def __getitem__(self, key):
-        return self.CONF_DECODERS.get(key, str)(self.section[key])
-
-    def __setitem__(self, key, value):
-        self.section[key] = self.CONF_ENCODERS.get(key, str)(value)
 
     def add_dataset(self, name, root_code, exist_ok=True):
         assert not (exist_ok and self.parser.has_section(name)), 'Dataset {} has already existed.'.format(name)

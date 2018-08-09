@@ -7,7 +7,6 @@ from jstatutree.etypes import sort_etypes
 from jstatutree.kvsdict import KVSDict
 from gensim.models.doc2vec import TaggedDocument
 
-from abconfig.abconfig import NEOConfig
 import multiprocessing
 from neo4jrestclient.client import Node
 from time import time
@@ -136,51 +135,6 @@ class HierarchicalDataset(JStatutreeKVS):
 
     def preprocess(self, sentence):
         return self.morph_separator.surfaces(sentence)
-class DatasetNEOConfig(NEOConfig):
-    CONF_ENCODERS = {
-            'levels': lambda l: ','.join([x if isinstance(x, str) else x.__name__ for x in l]),
-            }
-    CONF_DECODERS = {
-            'levels': lambda l: [getattr(graph_etypes, x) for x in l.split(',')],
-            'only_sentence': lambda x: x == 'True',
-            'only_reiki': lambda x: x == 'True',
-            }
-
-    def __init__(self, levels, dataset_basepath, result_basepath, path=None, only_reiki=True, only_sentence=True):
-        super().__init__(path)
-        self['levels'] = [l.capitalize() if isinstance(l, str) else l.__name__ for l in levels]
-        self['only_reiki'] = only_reiki
-        self['only_sentence'] = only_sentence
-        self['dataset_basepath'] = os.path.abspath(dataset_basepath)
-        self['result_basepath'] = os.path.abspath(result_basepath)
-
-
-    def add_dataset(self, name, root_code, exist_ok=True):
-        assert not (exist_ok and self.parser.has_section(name)), 'Dataset {} has already existed.'.format(name)
-        self.change_section(name, create_if_missing=True)
-        self.section['root_code'] = root_code
-
-    def set_dataset(self, name):
-        assert self.parser.has_section(name), 'Dataset {} does not exist.'.format(name)
-        self.change_section(name, create_if_missing=False)
-
-    @property
-    def dataset_path(self):
-        root_code = self['root_code'] if len(self['root_code']) == 2 else self['root_code'][:2]+'/'+self['root_code']
-        return os.path.join(self['dataset_basepath'], root_code)
-
-    @property
-    def result_path(self):
-        return os.path.join(self['result_basepath'], self.section.name)
-
-    def prepare_dataset(self, registering=True, workers=multiprocessing.cpu_count()):
-        assert self.section.name != 'DEFAULT', 'You must set dataset before get hgd instance'
-        dataset = HierarchicalGraphDataset.init_by_config(self)
-        if registering:
-            print('reg:', self.dataset_path)
-            graph_lawdata.register_directory(levels=self['levels'], basepath=self.dataset_path, loginkey=self.loginkey, workers=workers, only_reiki=self['only_reiki'], only_sentence=['only_sentence'])
-            dataset.add_government(self['root_code'])
-        return dataset
 
 class HierarchicalGraphDataset(object):
     def __init__(self, loginkey, dataset_name, levels='ALL', only_reiki=True, only_sentence=False, *args, **kwargs):

@@ -8,6 +8,7 @@ from copy import copy
 from hjst_model.hierarchical_dataset import *
 from hjst_model.hierarchical_model import *
 from hjst_model.layers import *
+from hjst_model.config import DatasetNEOConfig
 
 def setup_dataset(source_path, dbpath, levels):
     print("setup", dbpath)
@@ -34,16 +35,17 @@ if __name__ == "__main__":
     TRAININGSET_PATH = os.path.join(REIKISET_PATH, "23/230006")
     # TRAININGSET_DBPATH = os.path.join(RESULTBASEPATH, 'dataset', "aichi_pref_all.ldb")
     #trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
+
     CONFPATH = './configs/testset.conf'
     conf = DatasetNEOConfig(levels=LEVELS, dataset_basepath=REIKISET_PATH, result_basepath=RESULTBASEPATH, path=CONFPATH)
     conf.set_logininfo(host='127.0.0.1')
     # conf.update()
     try:
-        conf.set_dataset('aichi_pref')
-        trainingset = conf.prepare_dataset(registering=True)
+        conf.set_dataset('nazo')
+        trainingset = conf.prepare_dataset(registering=True, workers=2)
     except AssertionError:
-        conf.add_dataset('aichi_pref', '230006')
-        trainingset = conf.prepare_dataset()
+        conf.add_dataset('nazo', '232025')
+        trainingset = conf.prepare_dataset(workers=2)
     conf.update()
     hmodels = HierarchicalModel(trainingset)
     hmodels.set_layer(Law, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "aichi_LawD2V.model"), threshold=0.3)

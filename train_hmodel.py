@@ -29,12 +29,9 @@ if __name__ == "__main__":
 
     BASEPATH = os.path.abspath(os.path.dirname(__file__))
     RESULTBASEPATH = os.path.join(BASEPATH, 'results/hjst_model/test')
-    # RESULTPATH = os.path.join(RESULTBASEPATH, "all-aichi_pref")
-    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
+    REIKISET_PATH  = os.path.join(BASEPATH, "../jltset/")
     LEVELS = [Law, Article, Sentence]
     TRAININGSET_PATH = os.path.join(REIKISET_PATH, "23/230006")
-    # TRAININGSET_DBPATH = os.path.join(RESULTBASEPATH, 'dataset', "aichi_pref_all.ldb")
-    #trainingset = setup_dataset(TRAININGSET_PATH, TRAININGSET_DBPATH, LEVELS)
 
     CONFPATH = './configs/testset.conf'
     conf = DatasetNEOConfig(levels=LEVELS, dataset_basepath=REIKISET_PATH, result_basepath=RESULTBASEPATH, path=CONFPATH)
@@ -44,7 +41,7 @@ if __name__ == "__main__":
         conf.set_dataset('nazo')
         trainingset = conf.prepare_dataset(registering=True, workers=2)
     except AssertionError:
-        conf.add_dataset('nazo', '232025')
+        conf.add_dataset('nazo', '000000')
         trainingset = conf.prepare_dataset(workers=2)
     conf.update()
     hmodels = HierarchicalModel(trainingset)

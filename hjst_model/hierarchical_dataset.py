@@ -8,7 +8,6 @@ from jstatutree.kvsdict import KVSDict
 from gensim.models.doc2vec import TaggedDocument
 
 import multiprocessing
-from neo4jrestclient.client import Node
 from time import time
 import traceback
 import concurrent
@@ -144,10 +143,8 @@ class HierarchicalGraphDataset(object):
         self.morph_separator = Morph()
         self.levels = levels
         self.name= dataset_name
-        try:
-            self.root_codes = [node['code'] for node in self.gdb.db.labels.get(self.name).all()]
-        except KeyError:
-            self.root_codes = []
+        with self.gdb.driver.session() as session:
+            self.root_codes = [v[0] for v in session.run("MATCH (n:%s) RETURN n.code" % self.name).values()]
 
     @classmethod
     def init_by_config(cls, config):
@@ -160,13 +157,23 @@ class HierarchicalGraphDataset(object):
                 )
 
     def add_government(self, govcode):
-        if len(govcode) == 2:
-            res = self.gdb.db.query("""MATCH (pref:Prefectures{code: '%s'})-[:PREF_OF]->(muni:Municipalities) SET muni:%s RETURN muni.code""" % (govcode, self.name))
-            self.root_codes.extend([i[0] for i in res])
-        else:
-            res = self.gdb.db.query("""MATCH (muni:Municipalities{code: '%s'}) SET muni:%s""" % (govcode, self.name))
-            self.root_codes.append(govcode)
-        self.root_codes = list(set(self.root_codes))
+        with self.gdb.driver.session() as session:
+            if len(govcode) == 2:
+                res = session.run("""
+                        MATCH (pref:Prefectures{code: '%s'})-[:PREF_OF]->(muni:Municipalities)
+                        SET muni:%s
+                        RETURN muni.code
+                        """ % (govcode, self.name)
+                        ).values()
+                self.root_codes.extend([i[0] for i in res])
+            else:
+                session.run("""
+                        MATCH (muni:Municipalities{code: '%s'})
+                        SET muni:%s
+                        """ % (govcode, self.name)
+                        )
+                self.root_codes.append(govcode)
+            self.root_codes = list(set(self.root_codes))
 
     def set_iterator_mode(self, level, tag=None, sentence=None, gensim=None):
         self.itermode_level = level
@@ -178,7 +185,8 @@ class HierarchicalGraphDataset(object):
         assert self.__dict__.get('itermode_level', False), 'You must call set_iterator_mode before call iterator'
         def get_element_nodes(code):
             level_label = (self.itermode_level.capitalize() if isinstance(self.itermode_level, str) else self.itermode_level.__name__) + 's'
-            ret = [{'fullname': i[0], 'fulltext': i[1]} for i in self.gdb.db.query("""MATCH (muni:Municipalities{code: '%s'})-[]->(:Statutories)-[*1..]->(elem:%s) RETURN elem.fullname, elem.fulltext""" % (code, level_label), returns=(str, str))]
+            with self.gdb.driver.session() as session:
+                ret = [{'fullname': i[0], 'fulltext': i[1]} for i in session.run("""MATCH (muni:Municipalities{code: '%s'})-[]->(:Statutories)-[*1..]->(elem:%s) RETURN elem.fullname, elem.fulltext""" % (code, level_label))]
             return ret
         node_gen = (enode for enode_gen in (get_element_nodes(code) for code in self.root_codes) for enode in enode_gen)
         

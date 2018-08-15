@@ -3,14 +3,31 @@ import multiprocessing
 import os
 from .hierarchical_dataset import HierarchicalGraphDataset
 from jstatutree.graphtree import graph_etypes, graph_lawdata
+from jstatutree.etypes import get_etypes
+"""
+experiment = HJSTExperiment()
 
-def NEOConfigManager(object):
-    def __init__(self, basepath):
-        self.configs = {
-                'model': HierarchicalModelConfig(os.path.join('model.conf')),
-                'layer': LayerFrameworkConfig(os.path.join('layer.conf')),
-                'dataset': DatasetNEOConfig(os.path.join('dataset.conf')),
-                }
+if os.exists(path):
+    return
+
+with experiment.create(path) as e:
+    e.layers.set(Law, Doc2VecLayer, 0.3, None)
+    e.layers.set(Article, Doc2VecLayer, 0.5, None)
+    e.layers.set(Sentence, WVAverageLayer, 0.7, None)
+
+    e.trainingset.set(loginkey, "LAS_aichi")
+
+    e.train()
+
+    e.testset("LAS_nagoya")
+    e.refine()
+"""
+def HJSTExperiment(object):
+    def __init__(self, confpath):
+        self.basepath = basepath
+        self.layers = LayerFrameworkConfig(os.path.join(basepath, 'layer.conf'))
+        self.model = HierarchicalModelConfig(os.path.join(basepath, 'model.conf'))
+        self.dataset = DatasetNEOConfig(os.path.join(basepath, 'dataset.conf'))
 
 class HierarchicalModelConfig(ABConfig):
     CONF_ENCODERS = {}
@@ -38,7 +55,7 @@ class HierarchicalModelConfig(ABConfig):
         self['trained'] = True
 
 class LayerFrameworkConfig(ABConfig):
-    def set_layer(self, level, layer_cls, threshold=0.3, overwrite=False):
+    def set(self, level, layer_cls, threshold=0.3, overwrite=False):
         level = level if isinstance(level, str) else level.__name__
         if self.has_section(name) and not overwrite:
             return
@@ -56,8 +73,11 @@ class DatasetNEOConfig(NEOConfig):
             'only_reiki': lambda x: x == 'True',
             }
 
-    def __init__(self, levels, dataset_basepath, result_basepath, path=None, only_reiki=True, only_sentence=True):
+    def __init__(self, path, *args, **kwargs):
         super().__init__(path)
+        self.set_default(*args, **kwargs)
+
+    def set_default(self, levels=get_etypes(), dataset_basepath="", result_basepath="", only_reiki=True, only_sentence=True):
         self['levels'] = levels
         self['only_reiki'] = only_reiki
         self['only_sentence'] = only_sentence

@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     BASEPATH = os.path.abspath(os.path.dirname(__file__))
     RESULTBASEPATH = os.path.join(BASEPATH, 'results/hjst_model/test')
-    REIKISET_PATH  = os.path.join(BASEPATH, "../jltset/")
+    REIKISET_PATH  = os.path.join(BASEPATH, "../reikiset/")
     LEVELS = [Law, Article, Sentence]
     TRAININGSET_PATH = os.path.join(REIKISET_PATH, "23/230006")
 
@@ -38,11 +38,11 @@ if __name__ == "__main__":
     conf.set_logininfo(host='127.0.0.1')
     # conf.update()
     try:
-        conf.set_dataset('nazo')
-        trainingset = conf.prepare_dataset(registering=True, workers=2)
+        conf.set_dataset('hoge')
+        trainingset = conf.prepare_dataset(registering=True, workers=4)
     except AssertionError:
-        conf.add_dataset('nazo', '000000')
-        trainingset = conf.prepare_dataset(workers=2)
+        conf.add_dataset('hoge', '230006')
+        trainingset = conf.prepare_dataset(workers=4)
     conf.update()
     hmodels = HierarchicalModel(trainingset)
     hmodels.set_layer(Law, Doc2VecLayer, os.path.join(RESULTBASEPATH, 'layers', "aichi_LawD2V.model"), threshold=0.3)

@@ -38,10 +38,10 @@ if __name__ == "__main__":
     conf.set_logininfo(host='127.0.0.1')
     # conf.update()
     try:
-        conf.set_dataset('hoge')
+        conf.set_dataset('mihama')
         trainingset = conf.prepare_dataset(registering=True, workers=4)
     except AssertionError:
-        conf.add_dataset('hoge', '230006')
+        conf.add_dataset('mihama', '234460')
         trainingset = conf.prepare_dataset(workers=4)
     conf.update()
     hmodels = HierarchicalModel(trainingset)

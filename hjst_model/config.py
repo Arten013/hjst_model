@@ -96,6 +96,8 @@ class DatasetNEOConfig(NEOConfig):
 
     @property
     def dataset_path(self):
+        if self['root_code'] == '':
+            return self['dataset_basepath']
         root_code = self['root_code'] if len(self['root_code']) == 2 else self['root_code'][:2]+'/'+self['root_code']
         return os.path.join(self['dataset_basepath'], root_code)
 

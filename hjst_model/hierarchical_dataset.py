@@ -25,11 +25,11 @@ def find_all_files(directory, extentions=None):
                 yield os.path.join(root, file)
 
 class Morph(object):
-    def __init__(self, tagging_mode = ' '):     
+    def __init__(self, tagging_mode = ' '):
         self.tagger = MeCab.Tagger(tagging_mode)
         self.tagger.parse('')
 
-    def iter_surface(self, text):        
+    def iter_surface(self, text):
         morph_list = self.tagger.parseToNode(text)
         while morph_list:
             yield morph_list.surface
@@ -44,68 +44,96 @@ class HierarchicalDataset(JStatutreeKVS):
         self.only_reiki = only_reiki
         self.only_sentence = only_sentence
         self.levels = sort_etypes(levels)
+        self.dataset_name = dataset_name
+        self.kvsdicts['lawcodes'] = KVSDict(path=os.path.join(dbpath, 'lawcodes'))
         self.kvsdicts["texts"] = {
-            l: KVSDict(path=os.path.join(dbpath, dataset_name, "texts", l.__name__)) for l in levels
+            l.__name__: KVSDict(path=os.path.join(dbpath, dataset_name, "texts", l.__name__)) for l in levels
             }
         self.kvsdicts["edges"] = {
-            l: KVSDict(path=os.path.join(dbpath, dataset_name, "edges", l.__name__)) for l in levels[:-1]
+            l.__name__: KVSDict(path=os.path.join(dbpath, dataset_name, "edges", l.__name__)) for l in levels[:-1]
             }
+        self.kvsdicts['edges']['Statutory'] = KVSDict(path=os.path.join(dbpath, dataset_name, "edges", 'Statuotory'))
         self.morph_separator = Morph()
 
     def close(self):
-        for k in list(self.kvsdicts["texts"].keys()):
-            self.kvsdicts["texts"][k].close()
-            del self.kvsdicts["texts"][k]
-        del self.kvsdicts["texts"]
+        self.kvsdicts['lawcodes'].close()
+        if 'texts' in self.kvsdicts:
+            for k in list(self.kvsdicts["texts"].keys()):
+                self.kvsdicts["texts"][k].close()
+                del self.kvsdicts["texts"][k]
+            del self.kvsdicts["texts"]
 
-        for k in list(self.kvsdicts["edges"].keys()):
-            self.kvsdicts["edges"][k].close()
-            del self.kvsdicts["edges"][k]
-        del self.kvsdicts["edges"]
+        if 'edges' in self.kvsdicts:
+            for k in list(self.kvsdicts["edges"].keys()):
+                self.kvsdicts["edges"][k].close()
+                del self.kvsdicts["edges"][k]
+            del self.kvsdicts["edges"]
         super().close()
+
+    def iter_lawcodes(self):
+        yield from self.kvsdicts['lawcodes'][self.dataset_name]
+
+    def __len__(self):
+        return len(self.kvsdicts['lawcodes'][self.dataset_name])
 
     def set_data(self, reader):
         if self.only_reiki and not reader.lawdata.is_reiki():
-            return
-        statutree = ml_etypes.convert_recursively(reader.get_tree())
+            return False
+        code = reader.lawdata.code
+        if not self.kvsdicts['lawdata'].get(code, None):
+            statutree = ml_etypes.convert_recursively(reader.get_tree())
+            self.kvsdicts["lawdata"][code] = reader.lawdata
+            self.kvsdicts["root"][code] = statutree
+            for e in statutree.depth_first_iteration():
+                if len(e.text) > 0:
+                    self.kvsdicts["sentence"][code] = e.text
+        else:
+            statutree = self.kvsdicts['root'][code]
         writers = {
-                l:self.kvsdicts["texts"][l].write_batch(transaction=True)
+                l:self.kvsdicts["texts"][l.__name__].write_batch(transaction=True)
                 for l in self.levels
             }
         for li, level in enumerate(self.levels):
-            for elem in statutree.depth_first_search(level, valid_vnode=True):
+            next_elems = list(statutree.depth_first_search(level, valid_vnode=True))
+            if li == 0:
+                self.kvsdicts['edges']['Statutory'][reader.lawdata.code] = [e.code for e in next_elems]
+            for elem in next_elems:
                 #print("reg:", "vnode" if elem.is_vnode else "node", elem.code)
                 if self.only_sentence:
                     writers[level][elem.code] = "".join(elem.iter_sentences()) 
                 else:
                     writers[level][elem.code] = "".join(elem.iter_texts())
                 if level != self.levels[-1]:
-                    self.kvsdicts["edges"][level][elem.code] = [e.code for e in elem.depth_first_search(self.levels[li+1], valid_vnode=True)]
-        code = reader.lawdata.code
-        self.kvsdicts["lawdata"][code] = reader.lawdata
-        self.kvsdicts["root"][code] = statutree
-        for e in statutree.depth_first_iteration():
-            if len(e.text) > 0:
-                self.kvsdicts["sentence"][code] = e.text
+                    self.kvsdicts["edges"][level.__name__][elem.code] = [e.code for e in elem.depth_first_search(self.levels[li+1], valid_vnode=True)]
         for writer in writers.values():
             writer.write()
+        return True
 
-    def register_directory(self, basepath, overwrite=False):
-        if not overwrite and not self.kvsdicts["lawdata"].is_empty():
-            print("skip registering")
-            return
+    def register_directory(self, basepath, overwrite=False, maxsize=None):
+        # if not overwrite and not self.kvsdicts["lawdata"].is_empty():
+        #     print("skip registering", basepath)
+        #     return
+        exist_lawcodes = self.kvsdicts['lawcodes'].get(self.dataset_name, [])
         for path in find_all_files(basepath, [".xml"]):
+            if maxsize is not None and len(exist_lawcodes) >= maxsize:
+                print(exist_lawcodes)
+                print(len(exist_lawcodes))
+                break
             try:
                 rr = xml_lawdata.ReikiXMLReader(path)
                 rr.open()
                 if rr.is_closed():
                     continue
-                self.set_data(rr)
+                if rr.lawdata.code in exist_lawcodes:
+                    continue
+                if self.set_data(rr):
+                    exist_lawcodes.append(rr.lawdata.code)
                 rr.close()
             except LawError as e:
                 pass
                 #print(e)
         self.is_empty = False
+        self.kvsdicts['lawcodes'][self.dataset_name] = exist_lawcodes
 
     def set_iterator_mode(self, level, tag=None, sentence=None):
         self.itermode_level = level
@@ -186,19 +214,19 @@ class HierarchicalGraphDataset(object):
         def get_element_nodes(code):
             level_label = (self.itermode_level.capitalize() if isinstance(self.itermode_level, str) else self.itermode_level.__name__) + 's'
             with self.gdb.driver.session() as session:
-                ret = [{'fullname': i[0], 'fulltext': i[1]} for i in session.run("""MATCH (muni:Municipalities{code: '%s'})-[]->(:Statutories)-[*1..]->(elem:%s) RETURN elem.fullname, elem.fulltext""" % (code, level_label))]
+                ret = [{'id': i[0], 'fulltext': i[1]} for i in session.run("""MATCH (muni:Municipalities{code: '%s'})-[]->(:Statutories)-[*1..]->(elem:%s) RETURN elem.id, elem.fulltext""" % (code, level_label))]
             return ret
         node_gen = (enode for enode_gen in (get_element_nodes(code) for code in self.root_codes) for enode in enode_gen)
         
         if self.itermode_tag and self.itermode_sentence:
             if self.itermode_gensim:
-                self.generator = map(lambda x: TaggedDocument(tags=[x['fullname']], words=self.preprocess(x['fulltext'])), node_gen)
+                self.generator = map(lambda x: TaggedDocument(tags=[x['id']], words=self.preprocess(x['fulltext'])), node_gen)
             else:
-                self.generator = map(lambda x: (x['fullname'], self.preprocess(x['fulltext'])), node_gen)
+                self.generator = map(lambda x: (x['id'], self.preprocess(x['fulltext'])), node_gen)
         elif self.itermode_sentence:
             self.generator = map(lambda x: self.preprocess(x['fulltext']), node_gen)
         elif self.itermode_tag:
-            self.generator = map(lambda x: x['fullname'], node_gen)
+            self.generator = map(lambda x: x['id'], node_gen)
         else:
             self.generator = (x for x in [])
         return self

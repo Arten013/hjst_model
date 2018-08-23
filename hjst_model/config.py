@@ -1,9 +1,11 @@
 from abconfig.abconfig import ABConfig, NEOConfig
 import multiprocessing
 import os
-from .hierarchical_dataset import HierarchicalGraphDataset
+from .hierarchical_dataset import HierarchicalDataset, HierarchicalGraphDataset
 from jstatutree.graphtree import graph_etypes, graph_lawdata
 from jstatutree.etypes import get_etypes
+from .hierarchical_model import HierarchicalModel
+import re
 """
 experiment = HJSTExperiment()
 
@@ -22,94 +24,191 @@ with experiment.create(path) as e:
     e.testset("LAS_nagoya")
     e.refine()
 """
-def HJSTExperiment(object):
-    def __init__(self, confpath):
-        self.basepath = basepath
-        self.layers = LayerFrameworkConfig(os.path.join(basepath, 'layer.conf'))
-        self.model = HierarchicalModelConfig(os.path.join(basepath, 'model.conf'))
-        self.dataset = DatasetNEOConfig(os.path.join(basepath, 'dataset.conf'))
+
+from . import layers as layer_module
+def _encode_layer_class(layer):
+    if isinstance(layer, str):
+        assert layer in dir(layer_module), 'Invalid layer module "%s"' % layer
+        return layer
+    elif isinstance(layer, type):
+        return _encode_layer_class(layer.__name__)
+    TypeError('You must give layer by class or string.')
 
 class HierarchicalModelConfig(ABConfig):
-    CONF_ENCODERS = {}
-    CONF_DECODERS = {
-            'trained': lambda x: x == 'True',
+    CONF_ENCODERS = {
+            'class': _encode_layer_class,
+            'threshold': lambda x: str(round(x, 2))
             }
-    def __init__(self, layer_config, dataset_config, path=None):
-        self.layer_config = layer_config
-        self.dataset_config = dataset_config
-        self['layer_config'] = layer_config.path
-        self['dataset_config'] = dataset_config.path
+    CONF_DECODERS = {
+            'class': lambda x: getattr(layer_module, x),
+            'threshold': float
+            }
+    DEFAULT_SECTION = 'COMMON'
 
-    def create(self, model_path, layerframework_name, trainingset_name, overwrite=False):
-        model_name = os.path.splitext(os.path.split(model_path)[1])
-        assert self.layer_config.has_section(layerframework_name), ''
-        if not overwrite and (self.has_section(model_name) or os.path.exists(model_path)):
-            return
-        self.change_section(model_name, exists)
-        self['model_path'] = model_path
-        self['layerframework_name'] = model_name
-        self['trainingset'] = trainingset
-        self['trained'] = False
+    @property
+    def layer_config(self):
+        if '_layer_config' not in self.__dict__:
+            self._layer_config = LayerModelConfig()
+            self._layer_config.link(self['layer_conf_path'], create_if_missing=False)
+        return self._layer_config
 
-    def train(self):
-        self['trained'] = True
+    def set_directory(self, layer_conf_path):
+        self['layer_conf_path'] = os.path.abspath(layer_conf_path)
 
-class LayerFrameworkConfig(ABConfig):
-    def set(self, level, layer_cls, threshold=0.3, overwrite=False):
+    def set_layer_method(self, level, layer_class, threshold):
         level = level if isinstance(level, str) else level.__name__
-        if self.has_section(name) and not overwrite:
-            return
-        self.change_section(level, create_if_missing=True)
-        self['threshold'] = threshold
-        self['layer'] = layer_cls.__name__
+        if self.has_section(level):
+            print("This model already have", level, 'layer.')
+        with self.batch_update(level) as layer_setting:
+            layer_setting['type'] = 'method'
+            layer_setting['class'] = layer
+            layer_setting['threshold'] = threshold
 
-class DatasetNEOConfig(NEOConfig):
+    def set_layer_model(self, level, layer, threshold):
+        level = level if isinstance(level, str) else level.__name__
+        if self.has_section(level):
+            print("This model already have", level, 'layer.')
+        with self.batch_update(level) as layer_setting:
+            layer_setting['type'] = 'model'
+            layer_setting['name'] = layer
+            layer_setting['threshold'] = threshold
+
+    def model_generate(self):
+        hmodel = HierarchicalModel()
+        for level, layer in self.iter_sections():
+            level = getattr(graph_etypes, level)
+            if layer['type'] == 'method':
+                raise 'Not Implemented yet'
+            else:
+                hmodel.set_trained_model_layer(level.__name__, self.layer_config.load_model(self['name']), layer['threshold'])
+        return hmodel
+
+class LayerModelConfig(ABConfig):
+    DEFAULT_SECTION = 'COMMON'
+    CONF_ENCODERS = {
+            'model': _encode_layer_class,
+            'levels': lambda l: ','.join([x if isinstance(x, str) else x.__name__ for x in l]),
+            }
+    CONF_DECODERS = {
+            'model': lambda x: getattr(layer_module, x),
+            'levels': lambda l: [getattr(graph_etypes, x) for x in l.split(',')],
+            }
+
+    @property
+    def dataset_config(self):
+        if '_dataset_config' not in self.__dict__:
+            self._dataset_config = DatasetKVSConfig()
+            self._dataset_config.link(self['dataset_conf_path'], create_if_missing=False)
+        return self._dataset_config
+
+    def set_directory(self, model_dir, dataset_conf_path):
+        self['model_dir'] = os.path.abspath(model_dir)
+        self['dataset_conf_path'] = os.path.abspath(dataset_conf_path)
+
+    def get_model_name(self, trainingset_name=None, model_class=None, level=None, separator='-'):
+        trainingset_name = trainingset_name if trainingset_name is not None else self['trainingset']
+        model_class = model_class if model_class is not None else self['model']
+        level = level if level is not None else self['level']
+        return '{trainingset_name}{sep}{model}{sep}{level}'.format(
+                sep=separator,
+                trainingset_name=trainingset_name,
+                model=model_class.__name__,
+                level=level if isinstance(level, str) else level.__name__
+            )
+
+    def load_model(self, name=None):
+        name = name or self.section_name
+        with self.temporal_section_change(name) as s:
+            return s['model'].load(s.model_path)
+
+    def create_layer(self, trainingset_name, model_class, level):
+        name = self.get_model_name(trainingset_name, model_class, level)
+        if self.has_section(name):
+            print('Layer', name, 'has already exists.')
+            return
+        with self.batch_update(name) as sect:
+            sect['model'] = model_class
+            sect['trainingset'] = trainingset_name
+            sect['level'] = level
+            model = self['model'](self['level'], self.model_path)
+            self.dataset_config.change_section(trainingset_name)
+            ds = self.dataset_config.prepare_dataset()
+            model.train(ds)
+            model.save()
+            ds.close()
+            del ds
+        return model
+
+    @property
+    def model_path(self):
+        return os.path.join(self['model_dir'], self.get_model_name(separator='/') + '.lmodel')
+
+def _gov_codes_encoder(codes):
+    if len(codes) == 0:
+        return 'None'
+    if 'ALL' in codes or codes == ['{0:02}'.format(v) for v in range(1,47)]:
+        return 'ALL'
+    codes = sorted(map(int, list(set(codes))))
+    ret = []
+    for code in codes:
+        if code < 100:
+            ret.append('{0:02}'.format(code))
+        else:
+            if code//10000 in codes:
+                continue
+            ret.append('{0:06}'.format(code))
+    return ', '.join(ret)
+
+class DatasetConfigBase(ABConfig):
     CONF_ENCODERS = {
             'levels': lambda l: ','.join([x if isinstance(x, str) else x.__name__ for x in l]),
+            'gov_codes': _gov_codes_encoder,
             }
     CONF_DECODERS = {
             'levels': lambda l: [getattr(graph_etypes, x) for x in l.split(',')],
             'only_sentence': lambda x: x == 'True',
             'only_reiki': lambda x: x == 'True',
+            'gov_codes': lambda x: ['{0:02}'.format(v) for v in range(1,47)] if x == 'ALL' else ([] if x == 'None' else re.split(', ', x)),
+            'maxsize': lambda x: None if x == 'None' else int(x)
             }
+    DEFAULT_SECTION = 'COMMON'
 
-    def __init__(self, path, *args, **kwargs):
-        super().__init__(path)
-        self.set_default(*args, **kwargs)
-
-    def set_default(self, levels=get_etypes(), dataset_basepath="", result_basepath="", only_reiki=True, only_sentence=True):
-        self['levels'] = levels
-        self['only_reiki'] = only_reiki
-        self['only_sentence'] = only_sentence
+    def set_directory(self, dataset_basepath):
         self['dataset_basepath'] = os.path.abspath(dataset_basepath)
-        self['result_basepath'] = os.path.abspath(result_basepath)
+        self['gov_codes'] = []
 
+    def iter_dataset_paths(self):
+        if self['gov_codes'] == '':
+            yield self['dataset_basepath']
+            raise StopIteration
+        for gov_code in self['gov_codes']:
+            gov_dir = gov_code if len(gov_code) == 2 else gov_code[:2]+'/'+gov_code
+            yield os.path.join(self['dataset_basepath'], gov_dir)
 
-    def add_dataset(self, name, root_code, exist_ok=True):
-        assert not (exist_ok and self.parser.has_section(name)), 'Dataset {} has already existed.'.format(name)
-        self.change_section(name, create_if_missing=True)
-        self.section['root_code'] = root_code
-
-    def set_dataset(self, name):
-        assert self.parser.has_section(name), 'Dataset {} does not exist.'.format(name)
-        self.change_section(name, create_if_missing=False)
-
-    @property
-    def dataset_path(self):
-        if self['root_code'] == '':
-            return self['dataset_basepath']
-        root_code = self['root_code'] if len(self['root_code']) == 2 else self['root_code'][:2]+'/'+self['root_code']
-        return os.path.join(self['dataset_basepath'], root_code)
-
-    @property
-    def result_path(self):
-        return os.path.join(self['result_basepath'], self.section.name)
-
-    def prepare_dataset(self, registering=True, workers=multiprocessing.cpu_count()):
-        assert self.section.name != 'DEFAULT', 'You must set dataset before get hgd instance'
+class DatasetNEOConfig(NEOConfig, DatasetConfigBase):
+    def prepare_dataset(self, graph_construction=True, registering=True, workers=multiprocessing.cpu_count()):
+        assert self.section.name != self.__class__.DEFAULT_SECTION, 'You must set dataset before get hgd instance'
         dataset = HierarchicalGraphDataset.init_by_config(self)
-        if registering:
-            print('reg:', self.dataset_path)
-            graph_lawdata.register_directory(levels=self['levels'], basepath=self.dataset_path, loginkey=self.loginkey, workers=workers, only_reiki=self['only_reiki'], only_sentence=['only_sentence'])
-            dataset.add_government(self['root_code'])
+        for dataset_path in self.iter_dataset_paths():
+            if graph_construction:
+                print('construct graph from:', self.dataset_path)
+                graph_lawdata.register_directory(levels=self['levels'], basepath=dataset_path, loginkey=self.loginkey, workers=workers, only_reiki=self['only_reiki'], only_sentence=['only_sentence'])
+            if registering:
+                dataset.add_government(os.path.split(dataset_path)[0])
         return dataset
+
+class DatasetKVSConfig(DatasetConfigBase):
+    def set_directory(self, dataset_basepath, savedir):
+        super().set_directory(dataset_basepath)
+        self['savedir'] = savedir
+
+    def prepare_dataset(self):
+        dataset = HierarchicalDataset(self['savedir'], self.section_name, self['levels'],self['only_reiki'], self['only_sentence'])
+        for path in self.iter_dataset_paths():
+            print(path)
+            dataset.register_directory(path, overwrite=True, maxsize=self.get('maxsize', None))
+        additional_govs = self['gov_codes']
+        with self.temporal_section_change(self.DEFAULT_SECTION):
+            self['gov_codes'] = self['gov_codes'] + additional_govs
+        return dataset
+

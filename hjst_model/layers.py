@@ -10,6 +10,7 @@ import numpy as np
 import pickle
 import editdistance
 import multiprocessing
+from neo4j.v1 import GraphDatabase
 
 
 
@@ -138,10 +139,11 @@ class WVAverageLayer(ModelLayerBase):
         return layer
 
     def compare(self, elem1, elem2):
-        return np.dot(self.vecs[elem1], self.vecs[elem2])
+        v1, v2 = self.model.vecs[elem1], self.model.vecs[elem2]
+        return np.dot(v1, v2)/(np.linalg.norm(v1) * np.linalg.norm(v2))
 
     def __str__(self):
-        return "Word Embedding Average Model"
+        return "WVAModel"
 
 class Doc2VecLayer(ModelLayerBase):
     def train(self, dataset):
@@ -174,7 +176,7 @@ class Doc2VecLayer(ModelLayerBase):
         return self.model.docvecs.similarity(elem1, elem2)
 
     def __str__(self):
-        return "Doc2Vec model"
+        return "Doc2VecModel"
 
 class TfidfLayer(ModelLayerBase):
     def train(self, dataset):
@@ -215,3 +217,79 @@ class LevenLayer(MethodLayerBase):
         s2 = self.dataset.sentence_dict[self.level][elem2]
         ret = 1 - editdistance.eval(s1, s2)/max(len(s1),len(s2))
         return ret
+
+class GDBWVAverageModel(WVAverageModel):
+    def __init__(self, wvmodel, savepath, gdb, level):
+        self.wvmodel = wvmodel
+        self.savepath = savepath
+        os.makedirs(self.savepath, exist_ok=True)
+        self.uri = gdb.uri
+        self.auth = gdb.auth
+        self.driver = GraphDatabase.driver(uri=self.uri, auth=self.auth)
+        self.level = level if isinstance(level, str) else level.__name__
+
+
+    def train(self, tagged_texts):
+        with self.driver.session() as session:
+            for tag, text in tagged_texts:
+                if not isinstance(tag, str):
+                    print('WARNING: text tag is not str (type {})'.format(type(tag)))
+                    tag = str(tag)
+                session.run(
+                        """
+                            MATCH (n:%s{id: '%s'})
+                            SET n.wva_vec = $vec
+                        """ % (self.level+'s', tag), vec=self._calc_vec(text).tolist())
+
+    def __getitem__(self, key):
+        pc, mc, fc, num = re.split('/', key)
+        with self.driver.session() as session:
+            return session.run("""
+                    MATCH (p:Prefectures)-->(m:Municipalities)-->(s:Statutories)-[:HAS_ELEM*]->(n:%s)
+                    WHERE p.code = $pc
+                    AND m.code = $mc
+                    AND s.code = $fc
+                    AND n.eid = $eid
+                    RETURN n.wva_vec
+                    LIMIT 1
+                    """ % self.level+'s',
+                    pc=pc, mc=mc, fc=fc, eid=key).single()[0]
+
+    def save(self):
+        self.wvmodel.save(os.path.join(self.savepath, 'wvmodel.model'))
+        tmp_wvmodel = self.wvmodel
+        self.wvmodel = None
+        del self.driver
+        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
+            pickle.dump(self, f)
+        self.wvmodel = tmp_wvmodel
+
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
+            self = pickle.load(f)
+        self.driver = GraphDatabase.driver(uri=self.uri, auth=self.auth)
+        return self
+
+    def load_wvmodel(self, model_path):
+        self.wvmodel = Word2Vec.load(model_path)
+
+class GDBWVAverageLayer(WVAverageLayer):
+    def train(self, dataset):
+        dataset.set_iterator_mode(self.level, tag=False, sentence=True)
+        wv = Word2Vec(
+                sentences = dataset,
+                size = 500,
+                window = 4,
+                min_count=10,
+                workers=multiprocessing.cpu_count()
+                )
+        dataset.set_iterator_mode(self.level, tag=True, sentence=True)
+        self.model = GDBWVAverageModel(wv, os.path.join(self.savepath, 'model_body'), dataset.gdb, self.level)
+        self.model.train(dataset)
+
+    def compare(self, elem1, elem2):
+        return np.dot(self.model[elem1], self.model[elem2])
+
+    def __str__(self):
+        return "GDBWVAModel"

@@ -122,7 +122,8 @@ class LayerModelConfig(ABConfig):
             return s['model'].load(s.model_path)
 
     def create_layer(self, trainingset_name, model_class, level, model_name = None, **kwargs):
-        name = model_name or self.get_model_name(trainingset_name, model_class, level)
+        name = model_name or self.get_model_name(trainingset_name, model_class)
+        name = os.path.join(name, level)
         if self.has_section(name):
             print('Layer', name, 'has already exists.')
             return

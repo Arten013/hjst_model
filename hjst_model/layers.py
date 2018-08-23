@@ -69,7 +69,7 @@ class ModelLayerBase(LayerBase):
 
 def get_spm(dataset, level, savepath, vocab_size=8000):
     model_path = os.path.join(savepath, 'model.model')
-    model_path = os.path.join(savepath, 'model.vocab')
+    vocab_path = os.path.join(savepath, 'model.vocab')
     corpus_path = os.path.join(savepath, 'corpus.txt')
     if not os.path.exists(savepath):
         os.makedirs(savepath)
@@ -77,8 +77,8 @@ def get_spm(dataset, level, savepath, vocab_size=8000):
         with open(corpus_path, 'w') as f:
             f.write('\n'.join(dataset))
         spm.SentencePieceTrainer.Train('--input={} --model_prefix=model --vocab_size={}'.format(corpus_path, vocab_size))
-        shutil('./model.model', model_path)
-        shutil('./model.vocab', vocab_path)
+        shutil.move('./model.model', model_path)
+        shutil.move('./model.vocab', vocab_path)
     sp = spm.SentencePieceProcessor()
     sp.load(model_path)
     return sp
@@ -92,7 +92,6 @@ class WVAverageModel(object):
 
     def init_vecs(self):
         self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
-        
 
     def train(self, tagged_texts):
         with self.vecs.write_batch() as wb:
@@ -133,7 +132,8 @@ class WVAverageModel(object):
 class WVAverageLayer(ModelLayerBase):
     def train(self, dataset, tokenizer='mecab'):
         if tokenizer == 'spm':
-            _tokenizer = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
+            spm = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
+            _tokenizer = lambda x: [w.decode('utf8') for w in spm.EncodeAsPieces(x)]
         else:
             _tokenizer = 'mecab'
         dataset.set_iterator_mode(self.level, tag=False, sentence=True, tokenizer=_tokenizer)
@@ -173,7 +173,8 @@ class WVAverageLayer(ModelLayerBase):
 class Doc2VecLayer(ModelLayerBase):
     def train(self, dataset):
         if tokenizer == 'spm':
-            _tokenizer = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
+            spm = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
+            _tokenizer = lambda x: [w.decode('utf8') for w in spm.EncodeAsPieces(x)]
         else:
             _tokenizer = 'mecab'
         dataset.set_iterator_mode(self.level, gensim=True, tokenizer=_tokenizer)

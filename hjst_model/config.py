@@ -121,8 +121,8 @@ class LayerModelConfig(ABConfig):
         with self.temporal_section_change(name) as s:
             return s['model'].load(s.model_path)
 
-    def create_layer(self, trainingset_name, model_class, level):
-        name = self.get_model_name(trainingset_name, model_class, level)
+    def create_layer(self, trainingset_name, model_class, level, model_name = None, **kwargs):
+        name = model_name or self.get_model_name(trainingset_name, model_class, level)
         if self.has_section(name):
             print('Layer', name, 'has already exists.')
             return
@@ -130,10 +130,12 @@ class LayerModelConfig(ABConfig):
             sect['model'] = model_class
             sect['trainingset'] = trainingset_name
             sect['level'] = level
+            for k, v in kwargs.items():
+                sect[k] = v
             model = self['model'](self['level'], self.model_path)
             self.dataset_config.change_section(trainingset_name)
             ds = self.dataset_config.prepare_dataset()
-            model.train(ds)
+            model.train(ds, **kwargs)
             model.save()
             ds.close()
             del ds

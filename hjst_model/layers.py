@@ -11,6 +11,11 @@ import pickle
 import editdistance
 import multiprocessing
 from neo4j.v1 import GraphDatabase
+from jstatutree import kvsdict
+try:
+    import sentencepiece as spm
+except:
+    print('WARNING: you cannot sentencepiece model')
 
 
 
@@ -60,8 +65,20 @@ class ModelLayerBase(LayerBase):
 
     def __str__(self):
         return self.__class__.__name__
-import numpy as np
-from jstatutree import kvsdict
+
+def get_spm(dataset, level, savepath, vocab_size=8000):
+    model_path = os.path.join(savepath, 'model.model')
+    corpus_path = os.path.join(savepath, 'corpus.txt')
+    if not os.path.exists(savepath):
+        os.makedirs(savepath)
+        dataset.set_iterator_mode(level, tag=False, sentence=True, tokenizer=lambda x: x)
+        with open(corpus_path, 'w') as f:
+            f.write('\n'.join(dataset))
+        spm.SentencePieceTrainer.Train('--input={} --model_prefix=model --vocab_size={}'.format(corpus_path, vocab_size))
+    sp = spm.SentencePieceProcessor()
+    sp.load(model_path)
+    return sp
+
 class WVAverageModel(object):
     def __init__(self, wvmodel, savepath):
         self.wvmodel = wvmodel
@@ -110,8 +127,12 @@ class WVAverageModel(object):
         self.wvmodel = Word2Vec.load(model_path)
 
 class WVAverageLayer(ModelLayerBase):
-    def train(self, dataset):
-        dataset.set_iterator_mode(self.level, tag=False, sentence=True)
+    def train(self, dataset, tokenizer='mecab'):
+        if tokenizer == 'spm':
+            _tokenizer = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
+        else:
+            _tokenizer = 'mecab'
+        dataset.set_iterator_mode(self.level, tag=False, sentence=True, tokenizer=_tokenizer)
         wv = Word2Vec(
                 sentences = dataset,
                 size = 500,
@@ -119,7 +140,7 @@ class WVAverageLayer(ModelLayerBase):
                 min_count=10,
                 workers=multiprocessing.cpu_count()
                 )
-        dataset.set_iterator_mode(self.level, tag=True, sentence=True)
+        dataset.set_iterator_mode(self.level, tag=True, sentence=True, tokenizer=_tokenizer)
         self.model = WVAverageModel(wv, os.path.join(self.savepath, 'model_body'))
         self.model.train(dataset)
 
@@ -147,8 +168,13 @@ class WVAverageLayer(ModelLayerBase):
 
 class Doc2VecLayer(ModelLayerBase):
     def train(self, dataset):
+        if tokenizer == 'spm':
+            _tokenizer = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
+        else:
+            _tokenizer = 'mecab'
+        dataset.set_iterator_mode(self.level, gensim=True, tokenizer=_tokenizer)
         self.model = Doc2Vec(
-            documents = dataset.iter_gensim_tagged_documents(self.level),
+            documents = dataset,
             dm = 1,
             vector_size=500,
             window=4,

@@ -135,14 +135,18 @@ class HierarchicalDataset(JStatutreeKVS):
         self.is_empty = False
         self.kvsdicts['lawcodes'][self.dataset_name] = exist_lawcodes
 
-    def set_iterator_mode(self, level, tag=None, sentence=None):
+    def set_iterator_mode(self, level, tag=None, sentence=None, tokenizer='mecab', gensim=False):
         self.itermode_level = level
         self.itermode_tag = tag if tag is not None else self.__dict__.get('itermode_tag', True)
         self.itermode_sentence = sentence if sentence is not None else self.__dict__.get('itermode_sentence', True)
+        self.tokenizer = self.morph_separator.surfaces if tokenizer == 'mecab' else tokenizer
+        self.gensim = gensim
 
     def __iter__(self):
         assert self.__dict__.get('itermode_level', False), 'You must call set_iterator_mode before call iterator'
-        if self.itermode_tag and self.itermode_sentence:
+        if self.gensim:
+            self.generator = map(lambda x: TaggedDocument(self.preprocess(x[1]), [x[0]]), self.kvsdicts['texts'][self.itermode_level].items())
+        elif self.itermode_tag and self.itermode_sentence:
             self.generator = map(lambda x: (x[0], self.preprocess(x[1])), self.kvsdicts['texts'][self.itermode_level].items())
         elif self.itermode_sentence:
             self.generator = map(lambda x: self.preprocess(x), self.kvsdicts['texts'][self.itermode_level].values())
@@ -157,11 +161,11 @@ class HierarchicalDataset(JStatutreeKVS):
     def iter_tagged_sentence(self, level):
         yield from ((t, self.preprocess(s)) for t, s in self.kvsdicts["texts"][level].items())
 
-    def iter_gensim_tagged_documents(self, level):
+    def iter_gensim_tagged_documents(self, level, _tokenizer='mecab'):
         return DatasetGensimGenerator(kvsdict=self.kvsdicts['texts'][level], preprocess=self.preprocess)
 
     def preprocess(self, sentence):
-        return self.morph_separator.surfaces(sentence)
+        return self.tokenizer(sentence)
 
 class HierarchicalGraphDataset(object):
     def __init__(self, loginkey, dataset_name, levels='ALL', only_reiki=True, only_sentence=False, *args, **kwargs):

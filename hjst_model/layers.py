@@ -6,6 +6,7 @@ from gensim.models.doc2vec import TaggedDocument
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from copy import copy
+import shutil
 import numpy as np
 import pickle
 import editdistance
@@ -68,6 +69,7 @@ class ModelLayerBase(LayerBase):
 
 def get_spm(dataset, level, savepath, vocab_size=8000):
     model_path = os.path.join(savepath, 'model.model')
+    model_path = os.path.join(savepath, 'model.vocab')
     corpus_path = os.path.join(savepath, 'corpus.txt')
     if not os.path.exists(savepath):
         os.makedirs(savepath)
@@ -75,6 +77,8 @@ def get_spm(dataset, level, savepath, vocab_size=8000):
         with open(corpus_path, 'w') as f:
             f.write('\n'.join(dataset))
         spm.SentencePieceTrainer.Train('--input={} --model_prefix=model --vocab_size={}'.format(corpus_path, vocab_size))
+        shutil('./model.model', model_path)
+        shutil('./model.vocab', vocab_path)
     sp = spm.SentencePieceProcessor()
     sp.load(model_path)
     return sp

@@ -4,6 +4,8 @@ from time import time
 import gc
 from .scored_pair import ScoredPairGDB
 import concurrent
+import pandas as pd
+from queue import Queue
 
 class HierarchicalModel(object):
     def __init__(self):
@@ -16,6 +18,30 @@ class HierarchicalModel(object):
         self.levels.append(level)
         self.layers[level] = model
         self.thresholds[level] = threshold
+
+    def get_layered_compare(self, testset, r1, r2):
+        def get_tree_paths(tree):
+            paths = []
+            edge_queue = Queue()
+            print(tree)
+            for edge in testset.kvsdicts['edges']['Statutory'][tree]:
+                edge_queue.put([edge])
+            while not edge_queue.empty():
+                item = edge_queue.get()
+                depth = len(item)
+                if depth < len(self.levels):
+                    edges = testset.kvsdicts['edges'][self.levels[depth-1]][item[-1]]
+                    for edge in edges:
+                        edge_queue.put(item+[edge])
+                else:
+                    paths.append(item)
+            return paths
+        paths_1, paths_2 = get_tree_paths(r1), get_tree_paths(r2)
+        tr_paths_1, tr_paths_2 = np.array(paths_1).transpose(), np.array(paths_2).transpose()
+        return np.array(
+                [layer.compare_by_idvectors(tr_paths_1[li], tr_paths_2[li])
+                for li, layer in enumerate(self.layers.values())]
+            )
 
     def refine_pairs(self, testset, candidate_pairs):
         for li, level in enumerate(self.levels):

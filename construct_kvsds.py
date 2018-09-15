@@ -9,7 +9,7 @@ parser.add_argument('--govcode', '-g', type=int, nargs='*', default='ALL',
                     help='an integer government code for the constructor')
 parser.add_argument('--level', '-l', nargs='*', default=['Law', 'Article', 'Sentence'],
                     help='layer level')
-parser.add_argument('--maxsize', '-m', type=int, default='None',
+parser.add_argument('--maxsize', '-m', default='None',
                     help='an integer government code for the constructor')
 args = parser.parse_args()
 

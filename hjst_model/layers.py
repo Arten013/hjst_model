@@ -26,13 +26,18 @@ class LayerBase(object):
             score = self.compare(k1, k2)
             scored_pairs.add_scored_pair(k1, k2, score)
 
+    def compare_by_idvectors(self, vec1, vec2):
+        return np.array(
+                [[self.compare(e1, e2) for e2 in vec2] for e1 in vec1]
+                )
+
+    def compare(self, elem1, elem2):
+        pass
+
 class MethodLayerBase(LayerBase):
     def __init__(self, dataset, level):
         self.dataset = dataset
         self.level = level
-
-    def compare(self, elem1, elem2):
-        pass
 
     @classmethod
     def is_model(self):
@@ -57,8 +62,6 @@ class ModelLayerBase(LayerBase):
     def train(self, dataset):
         pass
 
-    def compare(self, elem1, elem2):
-        pass
 
     @classmethod
     def is_model(self):

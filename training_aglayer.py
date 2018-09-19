@@ -3,23 +3,22 @@ import os
 import hjst_model.layers
 import re
 import argparse
+from jstatutree.etypes import *
 
 parser = argparse.ArgumentParser(description='Training layer using kvs dataset.')
 parser.add_argument('model',
                     help='training layer model')
-parser.add_argument('dataset',
-                    help='training set name')
+parser.add_argument('base_layer',
+                    help='training layer model')
+parser.add_argument('level',
+                    help='layer level')
 parser.add_argument('--name', '-n', default='None',
                     help='model name')
-parser.add_argument('--levels', '-l', nargs='*', default=None,
-                    help='layer level')
-parser.add_argument('--params', '-p', nargs='*',
-        help='optional model parameter (format key:value)')
 parser.add_argument('--test', default=False, action="store_true",
                     help='debug mode')
+#parser.add_argument('--params', '-p', nargs='*',
+#        help='optional model parameter (format key:value)')
 args = parser.parse_args()
-
-
 
 test_dir = "/test" if args.test else ""
 print(args)
@@ -33,12 +32,6 @@ layer_conf.set_directory(MODEL_DIR, os.path.join(CONF_DIR, 'dataset.conf'))
 layer_conf.update_file()
 
 model = getattr(hjst_model.layers, args.model)
-kwargs = {k:v for k, v in map(lambda x: re.split(':', x), args.params)}
-if args.levels:
-    levels = args.levels
-else:
-    dsc = layer_conf.dataset_config
-    dsc.change_section(args.dataset)
-    levels = dsc['levels']
-for l in levels:
-    layer_conf.create_layer(args.dataset, model, l, args.name, **kwargs)
+#kwargs = {k:v for k, v in map(lambda x: re.split(':', x), args.params)}
+
+layer_conf.create_aglayer(args.level, model, args.base_layer, args.name)#, **kwargs)

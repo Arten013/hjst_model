@@ -105,12 +105,11 @@ class LayerModelConfig(ABConfig):
         self['model_dir'] = os.path.abspath(model_dir)
         self['dataset_conf_path'] = os.path.abspath(dataset_conf_path)
 
-    def get_model_name(self, trainingset_name=None, model_class=None, level=None, separator='-'):
+    def get_model_name(self, trainingset_name=None, model_class=None, level=None):
         trainingset_name = trainingset_name if trainingset_name is not None else self['trainingset']
         model_class = model_class if model_class is not None else self['model']
         level = level if level is not None else self['level']
-        return '{trainingset_name}{sep}{model}{sep}{level}'.format(
-                sep=separator,
+        return '{trainingset_name}_{model}-{level}'.format(
                 trainingset_name=trainingset_name,
                 model=model_class.__name__,
                 level=level if isinstance(level, str) else level.__name__
@@ -121,9 +120,33 @@ class LayerModelConfig(ABConfig):
         with self.temporal_section_change(name) as s:
             return s['model'].load(s.model_path)
 
+    def create_aglayer(self, level, model_class, base_layer, model_name = None, **kwargs):
+        name = model_name or self.get_model_name(trainingset_name, model_class)
+        name = name+"-"+level
+        if self.has_section(name):
+            print('Layer', name, 'has already exists.')
+            return
+        with self.temporal_section_change(base_layer):
+            trainingset = self["trainingset"]
+        with self.batch_update(name) as sect:
+            sect['model'] = model_class
+            sect['base_layer'] = base_layer
+            sect['trainingset'] = trainingset
+            sect['level'] = level
+            for k, v in kwargs.items():
+                sect[k] = v
+            model = self['model'](self['level'], self.model_path)
+            with self.dataset_config.temporal_section_change(trainingset):
+                ds = self.dataset_config.prepare_dataset()
+                model.train(ds, self.load_model(base_layer))
+                model.save()
+                ds.close()
+                del ds
+        return model        
+        
     def create_layer(self, trainingset_name, model_class, level, model_name = None, **kwargs):
         name = model_name or self.get_model_name(trainingset_name, model_class)
-        name = os.path.join(name, level)
+        name = name+"-"+level
         if self.has_section(name):
             print('Layer', name, 'has already exists.')
             return
@@ -144,7 +167,7 @@ class LayerModelConfig(ABConfig):
 
     @property
     def model_path(self):
-        return os.path.join(self['model_dir'], self.get_model_name(separator='/') + '.lmodel')
+        return os.path.join(self['model_dir'], re.sub("-", "/", self.section_name) + '.lmodel')
 
 def _gov_codes_encoder(codes):
     if len(codes) == 0:

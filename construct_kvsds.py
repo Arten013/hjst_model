@@ -7,20 +7,23 @@ parser.add_argument('name',
                     help='dataset name (must be unique)')
 parser.add_argument('--govcode', '-g', type=int, nargs='*', default='ALL',
                     help='an integer government code for the constructor')
-parser.add_argument('--level', '-l', nargs='*', default=['Law', 'Article', 'Sentence'],
+parser.add_argument('--levels', '-l', nargs='*', default=['Law', 'Article', 'Sentence'],
                     help='layer level')
 parser.add_argument('--maxsize', '-m', default='None',
                     help='an integer government code for the constructor')
+parser.add_argument('--test', default=False, action="store_true",
+                    help='debug mode')
 args = parser.parse_args()
 
 
 
+test_dir = "/test" if args.test else ""
 DATASET_NAME = args.name
 ROOT_CODE = args.govcode
-CONF_DIR = './configs'
-REIKISET_DIR = '../reikiset'
-KVS_DIR = './results/hjst/kvsdataset'
-LEVELS = args.level
+CONF_DIR = './configs{}'.format(test_dir)
+REIKISET_DIR = '../home/reikiset'
+KVS_DIR = './results/hjst{}/kvsdataset'.format(test_dir)
+LEVELS = args.levels
 ONLY_REIKI = True
 ONLY_SENTENCE = True
 

@@ -62,6 +62,8 @@ class ModelLayerBase(LayerBase):
     def train(self, dataset):
         pass
 
+    def __getitem__(self, key):
+        return self.model[key]
 
     @classmethod
     def is_model(self):
@@ -69,14 +71,52 @@ class ModelLayerBase(LayerBase):
 
     def __str__(self):
         return self.__class__.__name__
+    
+class AggregationLayerBase(ModelLayerBase):
+    def __init__(self, level, savepath):
+        super().__init__(level, savepath)
+        os.makedirs(self.savepath, exist_ok=True)
+        self.init_vecs()
 
-def get_spm(dataset, level, savepath, vocab_size=8000):
+    def init_vecs(self):
+        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
+    
+    def train(self, dataset, base_layer):
+        with self.vecs.write_batch() as wb:
+            for pnode, cnodes in dataset.kvsdicts["edges"][self.level].items():
+                #print(pnode)
+                wb[pnode] = self._calc_vec(np.array([base_layer[n] for n in cnodes]))
+                
+    def __getitem__(self, key):
+        return self.vecs[key]
+                
+    def _calc_vec(self, matrix):
+        raise "You must implement aggregation function"
+
+    def save(self):
+        del self.vecs
+        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
+            pickle.dump(self, f)
+        self.init_vecs()
+
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
+            self = pickle.load(f)
+        self.init_vecs()
+        return self
+    
+class AverageAGLayer(AggregationLayerBase):
+    def _calc_vec(self, matrix):
+        return np.sum(matrix, axis=0)/np.linalg.norm(matrix)
+    
+def get_spm(dataset, savepath, vocab_size=16000):
     model_path = os.path.join(savepath, 'model.model')
     vocab_path = os.path.join(savepath, 'model.vocab')
     corpus_path = os.path.join(savepath, 'corpus.txt')
     if not os.path.exists(savepath):
         os.makedirs(savepath)
-        dataset.set_iterator_mode(level, tag=False, sentence=True, tokenizer=lambda x: x)
+        dataset.set_iterator_mode("Sentence", tag=False, sentence=True, tokenizer=lambda x: x)
         with open(corpus_path, 'w') as f:
             f.write('\n'.join(dataset))
         spm.SentencePieceTrainer.Train('--input={} --model_prefix=model --vocab_size={}'.format(corpus_path, vocab_size))
@@ -135,8 +175,8 @@ class WVAverageModel(object):
 class WVAverageLayer(ModelLayerBase):
     def train(self, dataset, tokenizer='mecab'):
         if tokenizer == 'spm':
-            spm = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
-            _tokenizer = lambda x: [w.decode('utf8') for w in spm.EncodeAsPieces(x)]
+            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'))
+            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
         else:
             _tokenizer = 'mecab'
         dataset.set_iterator_mode(self.level, tag=False, sentence=True, tokenizer=_tokenizer)
@@ -170,14 +210,17 @@ class WVAverageLayer(ModelLayerBase):
         v1, v2 = self.model.vecs[elem1], self.model.vecs[elem2]
         return np.dot(v1, v2)/(np.linalg.norm(v1) * np.linalg.norm(v2))
 
+    def __getitem__(self, key):
+        return self.model.vecs[key]
+    
     def __str__(self):
         return "WVAModel"
 
 class Doc2VecLayer(ModelLayerBase):
-    def train(self, dataset):
+    def train(self, dataset, tokenizer='mecab'):
         if tokenizer == 'spm':
-            spm = get_spm(dataset, self.level, os.path.join(self.savepath, 'spm'))
-            _tokenizer = lambda x: [w.decode('utf8') for w in spm.EncodeAsPieces(x)]
+            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'))
+            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
         else:
             _tokenizer = 'mecab'
         dataset.set_iterator_mode(self.level, gensim=True, tokenizer=_tokenizer)
@@ -189,6 +232,9 @@ class Doc2VecLayer(ModelLayerBase):
             min_count=10,
             workers=multiprocessing.cpu_count()
             )
+        
+    def __getitem__(self, key):
+        return self.model.docvecs[key]
 
     @classmethod
     def load(cls, path):
@@ -198,7 +244,7 @@ class Doc2VecLayer(ModelLayerBase):
         return layer
 
     def save(self):
-        os.makedirs(self.savepath)
+        os.makedirs(self.savepath, exist_ok=True)
         self.model.save(os.path.join(self.savepath, 'model_body'))
         model = self.model
         self.model = None

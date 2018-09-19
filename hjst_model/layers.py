@@ -105,6 +105,11 @@ class AggregationLayerBase(ModelLayerBase):
             self = pickle.load(f)
         self.init_vecs()
         return self
+
+    def compare(self, elem1, elem2):
+        v1, v2 = self.vecs[elem1], self.vecs[elem2]
+        return np.dot(v1, v2)
+
     
 class AverageAGLayer(AggregationLayerBase):
     def _calc_vec(self, matrix):
@@ -159,8 +164,10 @@ class WVAverageModel(object):
                 [self.wvmodel.wv[v] for v in text if v in self.wvmodel.wv]
                 )
         if arr.shape == np.array([]).shape:
+            print("WARNING: a zero vector allocated for the text below:")
+            print(text)
             return np.zeros(self.wvmodel.wv.vector_size)
-        return np.average(arr, axis=0)
+        return np.sum(arr, axis=0)/np.linalg.norm(arr)
 
     @classmethod
     def load(cls, path):
@@ -208,7 +215,7 @@ class WVAverageLayer(ModelLayerBase):
 
     def compare(self, elem1, elem2):
         v1, v2 = self.model.vecs[elem1], self.model.vecs[elem2]
-        return np.dot(v1, v2)/(np.linalg.norm(v1) * np.linalg.norm(v2))
+        return np.dot(v1, v2)
 
     def __getitem__(self, key):
         return self.model.vecs[key]

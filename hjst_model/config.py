@@ -142,7 +142,7 @@ class LayerModelConfig(ABConfig):
                 model.save()
                 ds.close()
                 del ds
-        return model        
+        return name        
         
     def create_layer(self, trainingset_name, model_class, level, model_name = None, **kwargs):
         name = model_name or self.get_model_name(trainingset_name, model_class)

@@ -26,11 +26,6 @@ class LayerBase(object):
             score = self.compare(k1, k2)
             scored_pairs.add_scored_pair(k1, k2, score)
 
-    def compare_by_idvectors(self, vec1, vec2):
-        return np.array(
-                [[self.compare(e1, e2) for e2 in vec2] for e1 in vec1]
-                )
-
     def compare(self, elem1, elem2):
         pass
 
@@ -42,6 +37,12 @@ class MethodLayerBase(LayerBase):
     @classmethod
     def is_model(self):
         return False
+    
+    def compare_by_idvectors(self, vec1, vec2):
+        return self.idvector_to_wvmatrix(vec1) * self.idvector_to_wvmatrix(vec2).T
+    
+    def idvector_to_wvmatrix(self, id_vec):
+        return np.matrix([self[_id] for _id in id_vec])
 
 class ModelLayerBase(LayerBase):
     def __init__(self, level, savepath):
@@ -110,10 +111,16 @@ class AggregationLayerBase(ModelLayerBase):
         v1, v2 = self.vecs[elem1], self.vecs[elem2]
         return np.dot(v1, v2)
 
-    
 class AverageAGLayer(AggregationLayerBase):
     def _calc_vec(self, matrix):
-        return np.sum(matrix, axis=0)/np.linalg.norm(matrix)
+        v = np.sum(matrix, axis=0)
+        return v/np.linalg.norm(v)
+
+class RandomAGLayer(AggregationLayerBase):
+    def _calc_vec(self, matrix):
+        print(matrix.shape)
+        v = np.random.normal(loc=0, scale=1000, size=(matrix.shape[1],))
+        return v/np.linalg.norm(v)
     
 def get_spm(dataset, savepath, vocab_size=16000):
     model_path = os.path.join(savepath, 'model.model')
@@ -167,7 +174,8 @@ class WVAverageModel(object):
             print("WARNING: a zero vector allocated for the text below:")
             print(text)
             return np.zeros(self.wvmodel.wv.vector_size)
-        return np.sum(arr, axis=0)/np.linalg.norm(arr)
+        v = np.sum(arr, axis=0)
+        return v/np.linalg.norm(v)
 
     @classmethod
     def load(cls, path):
@@ -223,6 +231,43 @@ class WVAverageLayer(ModelLayerBase):
     def __str__(self):
         return "WVAModel"
 
+class RandomLayer(ModelLayerBase):
+    def __init__(self, level, savepath):
+        super().__init__(level, savepath)
+        os.makedirs(self.savepath, exist_ok=True)
+        self.init_vecs()
+
+    def init_vecs(self):
+        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
+    
+    def train(self, dataset, scale=1, size=500):
+        dataset.set_iterator_mode(self.level, tag=True, sentence=False)
+        with self.vecs.write_batch() as wb:
+            for tag in list(dataset):
+                #print(tag)
+                v = np.random.normal(loc=0, scale=float(scale), size=(int(size),))
+                wb[tag] = v/np.linalg.norm(v)
+                
+    def __getitem__(self, key):
+        return self.vecs[key]
+
+    def save(self):
+        del self.vecs
+        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
+            pickle.dump(self, f)
+        self.init_vecs()
+
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
+            self = pickle.load(f)
+        self.init_vecs()
+        return self
+
+    def compare(self, elem1, elem2):
+        v1, v2 = self.vecs[elem1], self.vecs[elem2]
+        return np.dot(v1, v2)
+    
 class Doc2VecLayer(ModelLayerBase):
     def train(self, dataset, tokenizer='mecab'):
         if tokenizer == 'spm':

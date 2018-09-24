@@ -151,7 +151,7 @@ class HierarchicalDataset(JStatutreeKVS):
         elif self.itermode_sentence:
             self.generator = map(lambda x: self.preprocess(x), self.kvsdicts['texts'][self.itermode_level].values())
         elif self.itermode_tag:
-            self.generator = self.kvsdicts.keys()
+            self.generator = self.kvsdicts['texts'][self.itermode_level].keys()
         else:
             self.generator = (x for x in [])
         return self

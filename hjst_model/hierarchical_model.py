@@ -7,6 +7,8 @@ import concurrent
 import pandas as pd
 from queue import Queue
 
+
+
 class HierarchicalModel(object):
     def __init__(self):
         self.layers = dict()
@@ -14,34 +16,42 @@ class HierarchicalModel(object):
         self.levels = []
 
     def set_trained_model_layer(self, level, model, threshold):
+        print("set layer:", model.__class__.__name__, threshold)
         assert level not in self.levels, "Level " + str(level)+ " has already exists"
         self.levels.append(level)
         self.layers[level] = model
         self.thresholds[level] = threshold
-
-    def get_layered_compare(self, testset, r1, r2):
-        def get_tree_paths(tree):
-            paths = []
-            edge_queue = Queue()
-            print(tree)
-            for edge in testset.kvsdicts['edges']['Statutory'][tree]:
-                edge_queue.put([edge])
-            while not edge_queue.empty():
-                item = edge_queue.get()
-                depth = len(item)
-                if depth < len(self.levels):
-                    edges = testset.kvsdicts['edges'][self.levels[depth-1]][item[-1]]
-                    for edge in edges:
-                        edge_queue.put(item+[edge])
-                else:
-                    paths.append(item)
-            return paths
-        paths_1, paths_2 = get_tree_paths(r1), get_tree_paths(r2)
-        tr_paths_1, tr_paths_2 = np.array(paths_1).transpose(), np.array(paths_2).transpose()
-        return np.array(
-                [layer.compare_by_idvectors(tr_paths_1[li], tr_paths_2[li])
-                for li, layer in enumerate(self.layers.values())]
-            )
+        
+    def get_expanded_layer(self, testset, tree):
+        paths = []
+        edge_queue = Queue()
+        #print(tree)
+        for edge in testset.kvsdicts['edges']['Statutory'][tree]:
+            edge_queue.put([edge])
+        while not edge_queue.empty():
+            item = edge_queue.get()
+            depth = len(item)
+            if depth < len(self.levels):
+                edges = testset.kvsdicts['edges'][self.levels[depth-1]][item[-1]]
+                for edge in edges:
+                    edge_queue.put(item+[edge])
+            else:
+                paths.append(item)
+        return np.array(paths).transpose()
+        
+    def get_layered_law_matrix(self, testset, r):
+        print(self.levels, self.layers)
+        layered_idvec = self.get_expanded_layer(testset, r)
+        try:
+            layered_law_matrix = np.array([self.layers[self.levels[i]].idvector_to_wvmatrix(m) for i, m in enumerate(layered_idvec)])
+        except:
+            layered_law_matrix = np.array(
+                [
+                    np.matrix([self.layers[self.levels[i]][_id] for _id in id_vec])
+                    for i, id_vec in enumerate(layered_idvec)
+                ])
+            
+        return layered_idvec, layered_law_matrix
 
     def refine_pairs(self, testset, candidate_pairs):
         for li, level in enumerate(self.levels):

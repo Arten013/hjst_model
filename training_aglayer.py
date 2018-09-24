@@ -10,7 +10,7 @@ parser.add_argument('model',
                     help='training layer model')
 parser.add_argument('base_layer',
                     help='training layer model')
-parser.add_argument('level',
+parser.add_argument('--levels', nargs="+",
                     help='layer level')
 parser.add_argument('--name', '-n', default='None',
                     help='model name')
@@ -33,5 +33,8 @@ layer_conf.update_file()
 
 model = getattr(hjst_model.layers, args.model)
 #kwargs = {k:v for k, v in map(lambda x: re.split(':', x), args.params)}
-
-layer_conf.create_aglayer(args.level, model, args.base_layer, args.name)#, **kwargs)
+base_layer = args.base_layer
+for e in list(sort_etypes(get_etypes()))[::-1]:
+    if e.__name__ not in args.levels:
+        continue
+    base_layer = layer_conf.create_aglayer(e.__name__, model, base_layer, args.name)#, **kwargs)

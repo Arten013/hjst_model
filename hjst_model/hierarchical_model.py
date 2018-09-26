@@ -6,6 +6,10 @@ from .scored_pair import ScoredPairGDB
 import concurrent
 import pandas as pd
 from queue import Queue
+import nmslib
+import re
+import os
+from pathlib import Path
 
 
 
@@ -15,6 +19,60 @@ class HierarchicalModel(object):
         self.thresholds = dict()
         self.levels = []
 
+    def create_index(self, level, tags):
+        vectors = np.matrix([self.layers[level][tag] for tag in tags])
+        index = nmslib.init(method='hnsw', space='cosinesimil')
+        index.addDataPointBatch(vectors)
+        index.createIndex({'post': 2}, print_progress=True)
+    
+        return vectors, index
+
+    def comptable(self, dataset, query, targets, threshold, level):
+        qlevel = re.split('\(', os.path.split(query)[1])[0]
+        
+        # construct target sentence space
+        target_spaces = dict()
+        target_tags = dict()
+        for ltag in targets:
+            #dataset.set_iterator_mode(level=level, tag=True, sentence=False)
+            target_tags[ltag] = list(dataset.get_tags([ltag], level))
+            target_vectors, target_spaces[ltag] = self.create_index(level, target_tags[ltag])
+
+        columns = []
+        name = str(dataset.get_elem(query))
+        columns.append(("{0}({1})".format(name, query), level))
+        for ltag in targets:
+            tag = ltag#os.path.split(ltag)[0]
+            name = str(dataset.get_elem(tag))
+            columns.append(("{0}({1})".format(name, tag), level))
+            columns.append(("{0}({1})".format(name, tag), 'Distance'))
+        df = pd.DataFrame(columns=columns)
+        df.columns = pd.MultiIndex.from_tuples(columns)
+
+        sid = 0
+        for j, s in enumerate(dataset.get_tags([query], level)):
+            sid += 1
+            df.loc[sid, columns[0]] = dataset.kvsdicts["texts"][level][s]
+            for l, ltag in enumerate(targets):
+                resi, resd  = target_spaces[ltag].knnQuery(self.layers[level][s], 1)
+                if resd[0] < threshold:
+                    df.loc[sid, (columns[2*l+1][0], level)] = dataset.kvsdicts["texts"][level][target_tags[ltag][resi[0]]]
+                    df.loc[sid, (columns[2*l+1][0], 'Distance')] = round(resd[0], 3)
+        return df
+    
+    def topk_comptable(self, dataset, query, k, threshold, level):
+        qlevel = re.split('\(', os.path.split(query)[1])[0]
+        
+        # get similar law tags and vectors(= simple method output)
+        dataset.set_iterator_mode(level=qlevel, tag=True, sentence=False)
+        law_tags = list(dataset)
+        _, law_index = self.create_index(qlevel, law_tags)
+        tidx, _ = law_index.knnQuery(self.layers[qlevel][query], k=k+1)
+        target_law_tags = [law_tags[i] for i in tidx if law_tags[i] != query][:k]
+
+        return self.comptable(dataset, query, target_law_tags, threshold, level)
+    
+    
     def set_trained_model_layer(self, level, model, threshold):
         print("set layer:", model.__class__.__name__, threshold)
         assert level not in self.levels, "Level " + str(level)+ " has already exists"

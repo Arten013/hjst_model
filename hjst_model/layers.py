@@ -3,7 +3,7 @@ from gensim.models.word2vec import Word2Vec
 import re
 import os
 from gensim.models.doc2vec import TaggedDocument
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer, TfidfTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from copy import copy
 import shutil
@@ -13,6 +13,8 @@ import editdistance
 import multiprocessing
 from neo4j.v1 import GraphDatabase
 from jstatutree import kvsdict
+from sklearn.decomposition import TruncatedSVD
+from sklearn.pipeline import Pipeline
 try:
     import sentencepiece as spm
 except:
@@ -188,9 +190,9 @@ class WVAverageModel(object):
         self.wvmodel = Word2Vec.load(model_path)
 
 class WVAverageLayer(ModelLayerBase):
-    def train(self, dataset, tokenizer='mecab'):
+    def train(self, dataset, tokenizer='mecab', vocab_size=16000):
         if tokenizer == 'spm':
-            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'))
+            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'), vocab_size=int(vocab_size))
             _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
         else:
             _tokenizer = 'mecab'
@@ -269,9 +271,9 @@ class RandomLayer(ModelLayerBase):
         return np.dot(v1, v2)
     
 class Doc2VecLayer(ModelLayerBase):
-    def train(self, dataset, tokenizer='mecab'):
+    def train(self, dataset, tokenizer='mecab', vocab_size=16000):
         if tokenizer == 'spm':
-            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'))
+            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'), vocab_size=int(vocab_size))
             _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
         else:
             _tokenizer = 'mecab'
@@ -311,24 +313,58 @@ class Doc2VecLayer(ModelLayerBase):
         return "Doc2VecModel"
 
 class TfidfLayer(ModelLayerBase):
-    def train(self, dataset):
-        if self.vectorizer is not None:
-            return None
-        self.vectorizer = TfidfVectorizer(
+    def train(self, dataset, tokenizer='mecab', vocab_size=16000, idf=True, lsi_size=None):
+        idf = bool(idf)
+        lsi_size = int(lsi_size) if lsi_size else None
+        vocab_size = int(vocab_size)
+        if tokenizer == 'spm':
+            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'), vocab_size=int(vocab_size))
+            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
+        else:
+            _tokenizer = 'mecab'
+        dataset.set_iterator_mode(self.level, tag=True, sentence=False, tokenizer=_tokenizer)
+        self.tag_idx_dict = {k:i for i, k in enumerate(dataset)}
+        dataset.set_iterator_mode(self.level, tag=False, sentence=True, tokenizer=_tokenizer)
+        count_vectorizer = CountVectorizer(
             input='content',
-            max_df=0.5, 
-            min_df=1, 
-            max_features=30000, 
-            norm='l2'
+            #max_df=0.5, 
+            #min_df=1, 
+            lowercase = False,
+            max_features=vocab_size
             )
+        steps = [('CountVectorize', count_vectorizer)]
+        if idf:
+            steps.append(("TfidfTransform", TfidfTransformer()))
+        if lsi_size:
+            steps.append(
+                        ( 
+                            "TruncatedSVD",
+                            TruncatedSVD(n_components=lsi_size, algorithm='randomized', n_iter=10, random_state=42)
+                        )
+            )
+        self.transformer = Pipeline(steps)
+        self.mat = self.transformer.fit_transform([" ".join(s) for s in dataset])
 
-        self.vectorizer.fit_transform(self._iter_dataset(dataset.iter_tagged_documents(self.level)))
+    def save(self):
+        os.makedirs(self.savepath, exist_ok=True)
+        tmp_mat = self.mat
+        with open(os.path.join(self.savepath, 'matrix.npy'), "wb") as f:
+            np.save(f, self.mat)
+            del self.mat
+        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
+            pickle.dump(self, f)
+        self.mat = tmp_mat
+        
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
+            layer = pickle.load(f)
+        with open(os.path.join(path, 'matrix.npy'), "rb") as f:
+            layer.mat = np.load(f)
+        return layer
 
-    def _iter_dataset(self, iterable):
-        for tag, data in iterable:
-            pass
-
-
+    def __getitem__(self, key):
+        return self.mat[self.tag_idx_dict[key]]
 
     def compare(self, elem1, elem2):
         return self.model.docvecs.similarity(elem1, elem2)

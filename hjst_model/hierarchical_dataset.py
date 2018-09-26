@@ -15,6 +15,7 @@ import plyvel
 import os
 import MeCab
 import re
+from pathlib import Path
 
 def find_all_files(directory, extentions=None):
     for root, dirs, files in os.walk(directory):
@@ -55,6 +56,25 @@ class HierarchicalDataset(JStatutreeKVS):
         self.kvsdicts['edges']['Statutory'] = KVSDict(path=os.path.join(dbpath, dataset_name, "edges", 'Statuotory'))
         self.morph_separator = Morph()
 
+        
+    def get_tags(self, roots, level):
+        for root in roots:
+            current_level = re.split('\(', os.path.split(root)[1])[0]
+            if level == current_level:
+                yield root
+            else:
+                yield from self.get_tags(self.kvsdicts['edges'][current_level][root], level) 
+    
+    def get_elem(self, code):
+        parts = Path(code).parts
+
+        query_root = self.kvsdicts["root"]['/'.join(parts[:3])]
+        query_etype = getattr(ml_etypes, re.split('\(', parts[-1])[0])
+        for e in query_root.depth_first_iteration(target_etypes=[query_etype]):
+            if e.code == code:
+                return e
+        return None
+       
     def close(self):
         self.kvsdicts['lawcodes'].close()
         if 'texts' in self.kvsdicts:

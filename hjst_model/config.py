@@ -158,7 +158,7 @@ class LayerModelConfig(ABConfig):
                 sect[k] = v
             model = self['model'](self['level'], self.model_path)
             self.dataset_config.change_section(trainingset_name)
-            ds = self.dataset_config.prepare_dataset()
+            ds = self.dataset_config.prepare_dataset(registering=False)
             model.train(ds, **kwargs)
             model.save()
             ds.close()
@@ -228,8 +228,10 @@ class DatasetKVSConfig(DatasetConfigBase):
         super().set_directory(dataset_basepath)
         self['savedir'] = savedir
 
-    def prepare_dataset(self):
+    def prepare_dataset(self, registering=True):
         dataset = HierarchicalDataset(self['savedir'], self.section_name, self['levels'],self['only_reiki'], self['only_sentence'])
+        if not registering:
+            return dataset
         for path in self.iter_dataset_paths():
             print(path)
             dataset.register_directory(path, overwrite=True, maxsize=self.get('maxsize', None))

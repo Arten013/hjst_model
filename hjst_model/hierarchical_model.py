@@ -60,17 +60,25 @@ class HierarchicalModel(object):
                     df.loc[sid, (columns[2*l+1][0], 'Distance')] = round(resd[0], 3)
         return df
     
-    def topk_comptable(self, dataset, query, k, threshold, level):
+    def topk_comptable(self, dataset, query, k, threshold, level, root_threshold=None):
         qlevel = re.split('\(', os.path.split(query)[1])[0]
         
         # get similar law tags and vectors(= simple method output)
         dataset.set_iterator_mode(level=qlevel, tag=True, sentence=False)
         law_tags = list(dataset)
         _, law_index = self.create_index(qlevel, law_tags)
-        tidx, _ = law_index.knnQuery(self.layers[qlevel][query], k=k+1)
-        target_law_tags = [law_tags[i] for i in tidx if law_tags[i] != query][:k]
+        tidx, similarity = law_index.knnQuery(self.layers[qlevel][query], k=k+1)
+        target_law_tags = []
+        for i, sim in zip(tidx, similarity):
+            if law_tags[i] != query:
+                continue
+            if root_threshold and sim < root_threshold:
+                print("not enough distance", dataset.get_elem(law_tags[i]))
+                k -= 1
+                continue
+            target_law_tags.append(law_tags[i])
 
-        return self.comptable(dataset, query, target_law_tags, threshold, level)
+        return self.comptable(dataset, query, target_law_tags[:k], threshold, level)
     
     
     def set_trained_model_layer(self, level, model, threshold):

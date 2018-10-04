@@ -189,6 +189,107 @@ class WVAverageModel(object):
     def load_wvmodel(self, model_path):
         self.wvmodel = Word2Vec.load(model_path)
 
+class SWEMLayerBase(ModelLayerBase):
+    def __init__(self, level, savepath):
+        self.level = level
+        self.savepath = savepath
+        self.wvmodel_path = os.path.join(self.savepath,'..', 'wvmodel.model')
+        self.spm_path = os.path.join(self.savepath,'..', 'spm')
+        self.model = None
+        self.init_vecs()
+    
+    def init_vecs(self):
+        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
+    
+    def train(self, dataset, tokenizer='mecab', vocab_size=16000):
+        if tokenizer == 'spm':
+            spm = get_spm(dataset, self.spm_path, vocab_size=int(vocab_size))
+            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
+        else:
+            _tokenizer = 'mecab'
+        if os.path.exists(self.wvmodel_path):
+            self.load_wvmodel()
+        else:
+            dataset.set_iterator_mode("Law", tag=False, sentence=True, tokenizer=_tokenizer)
+            self.wvmodel = Word2Vec(
+                    sentences = dataset,
+                    size = 500,
+                    window = 4,
+                    min_count=10,
+                    max_vocab_size=vocab_size,
+                    workers=multiprocessing.cpu_count()
+                    )
+            self.wvmodel.save(self.wvmodel_path)
+        dataset.set_iterator_mode(self.level, tag=True, sentence=True, tokenizer=_tokenizer)
+        with self.vecs.write_batch() as wb:
+            for tag, text in dataset:
+                if not isinstance(tag, str):
+                    print('WARNING: text tag is not str (type {})'.format(type(tag)))
+                    tag = str(tag)
+                wb[tag] = self._calc_vec(text)
+    
+    def _calc_vec(self, text):
+        raise "Not implemented"
+
+    def save(self):
+        tmp_wvmodel = self.wvmodel
+        self.wvmodel = None
+        del self.vecs
+        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
+            pickle.dump(self, f)
+        self.init_vecs()
+        self.wvmodel = tmp_wvmodel
+
+    @classmethod
+    def load(cls, path):
+        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
+            layer = pickle.load(f)
+        layer.init_vecs()
+        return layer
+
+    def compare(self, elem1, elem2):
+        return np.dot(self.vecs[elem1], self.vecs[elem2])
+
+    def __getitem__(self, key):
+        return self.vecs[key]
+    
+    def load_wvmodel(self):
+        self.wvmodel = Word2Vec.load(self.wvmodel_path)
+    
+    def __str__(self):
+        return "WVAModel"
+
+class SWEMAverageLayer(SWEMLayerBase):        
+    def _calc_vec(self, text):
+        arr = np.array([self.wvmodel.wv[v] for v in text if v in self.wvmodel.wv])
+        if arr.shape == np.array([]).shape:
+            print("WARNING: a zero vector allocated for the text below:")
+            print(text)
+            return np.zeros(self.wvmodel.wv.vector_size)
+        v = np.sum(arr, axis=0)
+        return v/np.linalg.norm(v)
+    
+class SWEMMaxLayer(SWEMLayerBase):
+    def _calc_vec(self, text):
+        arr = np.array([self.wvmodel.wv[v] for v in text if v in self.wvmodel.wv])
+        if arr.shape == np.array([]).shape:
+            print("WARNING: a zero vector allocated for the text below:")
+            print(text)
+            return np.zeros(self.wvmodel.wv.vector_size)
+        v = np.max(arr, axis=0)
+        return v/np.linalg.norm(v)
+
+class SWEMConcatLayer(SWEMLayerBase):
+    def _calc_vec(self, text):
+        arr = np.array([self.wvmodel.wv[v] for v in text if v in self.wvmodel.wv])
+        if arr.shape == np.array([]).shape:
+            print("WARNING: a zero vector allocated for the text below:")
+            print(text)
+            return np.zeros(self.wvmodel.wv.vector_size*2)
+        v1, v2 = np.sum(arr, axis=0), np.max(arr, axis=0)
+        v = np.concatenate([v1/np.linalg.norm(v1), v2/np.linalg.norm(v2)], axis=None)
+        return v/np.linalg.norm(v)
+
 class WVAverageLayer(ModelLayerBase):
     def train(self, dataset, tokenizer='mecab', vocab_size=16000):
         if tokenizer == 'spm':

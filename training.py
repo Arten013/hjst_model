@@ -33,7 +33,8 @@ layer_conf.set_directory(MODEL_DIR, os.path.join(CONF_DIR, 'dataset.conf'))
 layer_conf.update_file()
 
 model = getattr(hjst_model.layers, args.model)
-kwargs = {k:v for k, v in map(lambda x: re.split(':', x), args.params)}
+args_params = args.params or []
+kwargs = {k:v for k, v in map(lambda x: re.split(':', x), args_params)}
 if args.levels:
     levels = args.levels
 else:

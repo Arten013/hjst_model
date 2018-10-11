@@ -13,9 +13,11 @@ import traceback
 import concurrent
 import plyvel
 import os
-import MeCab
 import re
 from pathlib import Path
+import threading
+import queue
+from .tokenizer import Morph
 
 def find_all_files(directory, extentions=None):
     for root, dirs, files in os.walk(directory):
@@ -24,20 +26,6 @@ def find_all_files(directory, extentions=None):
         for file in files:
             if extentions is None or os.path.splitext(file)[1] in extentions:
                 yield os.path.join(root, file)
-
-class Morph(object):
-    def __init__(self, tagging_mode = ' '):
-        self.tagger = MeCab.Tagger(tagging_mode)
-        self.tagger.parse('')
-
-    def iter_surface(self, text):
-        morph_list = self.tagger.parseToNode(text)
-        while morph_list:
-            yield morph_list.surface
-            morph_list = morph_list.next
-
-    def surfaces(self, text):
-        return list(self.iter_surface(text))
 
 class HierarchicalDataset(JStatutreeKVS):
     def __init__(self, dbpath, dataset_name, levels, only_reiki=True, only_sentence=False, *args, **kwargs):
@@ -128,24 +116,59 @@ class HierarchicalDataset(JStatutreeKVS):
         for writer in writers.values():
             writer.write()
         return True
-
-    def register_directory(self, basepath, overwrite=False, maxsize=None):
-        # if not overwrite and not self.kvsdicts["lawdata"].is_empty():
-        #     print("skip registering", basepath)
-        #     return
+    
+    def register_directory(self, basepath, **kwargs):
+        codes = [os.path.join(*Path(p).with_suffix('').parts[-3:]) for p in Path(basepath).glob('**/*.xml')]
+        basedir = os.path.join(*next(Path(basepath).glob('**/*.xml')).parts[:-3])
+        self.register_from_codes(codes=codes, basedir=basedir, **kwargs)
+    
+    @staticmethod
+    def keywords_search(keywords, text):
+        for kw in keywords:
+            if kw not in text:
+                return False
+        return True
+    
+    @staticmethod
+    def _get_rr(codes, basedir, exist_lawcodes, queue, close_signal, keywords=None):
+        keywords = keywords or []
+        for code in codes:
+            if close_signal.is_set():
+                break
+            if code in exist_lawcodes:
+                continue
+            path = os.path.join(basedir, code+'.xml')
+            rr = xml_lawdata.ReikiXMLReader(path)
+            rr.open()
+            if rr.is_closed():
+                continue
+            if not HierarchicalDataset.keywords_search(keywords, rr.lawdata.name):
+                continue 
+            print('add:', rr.lawdata.name)
+            queue.put(rr)
+        else:
+            queue.put(None)
+            close_signal.set()
+            
+    def register_from_codes(self, codes, basedir, maxsize=None, keywords=None, **kwargs):
+        # get lawcodes in the dataset
         exist_lawcodes = self.kvsdicts['lawcodes'].get(self.dataset_name, [])
-        for path in find_all_files(basepath, [".xml"]):
+        rr_queue = queue.Queue()
+        close_signal  = threading.Event()
+        thread = threading.Thread(target=self._get_rr, args=(codes, basedir, exist_lawcodes, rr_queue, close_signal, keywords))
+        thread.start()
+        while not close_signal.is_set():
+            item = rr_queue.get()
+            if item is None:
+                break
+            rr = item
             if maxsize is not None and len(exist_lawcodes) >= maxsize:
                 print(exist_lawcodes)
                 print(len(exist_lawcodes))
+                close_signal.set()
+                thread.join()
                 break
             try:
-                rr = xml_lawdata.ReikiXMLReader(path)
-                rr.open()
-                if rr.is_closed():
-                    continue
-                if rr.lawdata.code in exist_lawcodes:
-                    continue
                 if self.set_data(rr):
                     exist_lawcodes.append(rr.lawdata.code)
                 rr.close()

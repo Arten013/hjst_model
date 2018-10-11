@@ -3,6 +3,8 @@ from gensim.models.word2vec import Word2Vec
 import re
 import os
 from gensim.models.doc2vec import TaggedDocument
+from gensim.models.fasttext import FastText
+from gensim.models.keyedvectors import Word2VecKeyedVectors
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer, TfidfTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from copy import copy
@@ -13,12 +15,12 @@ import editdistance
 import multiprocessing
 from neo4j.v1 import GraphDatabase
 from jstatutree import kvsdict
+from jstatutree.tree_element import TreeElement
 from sklearn.decomposition import TruncatedSVD
 from sklearn.pipeline import Pipeline
-try:
-    import sentencepiece as spm
-except:
-    print('WARNING: you cannot sentencepiece model')
+from glove import Glove as GloveModel
+from glove import Corpus as GloveCorpus
+from .tokenizer import load_spm, get_spm, Morph
 
 
 
@@ -123,22 +125,6 @@ class RandomAGLayer(AggregationLayerBase):
         print(matrix.shape)
         v = np.random.normal(loc=0, scale=1000, size=(matrix.shape[1],))
         return v/np.linalg.norm(v)
-    
-def get_spm(dataset, savepath, vocab_size=16000):
-    model_path = os.path.join(savepath, 'model.model')
-    vocab_path = os.path.join(savepath, 'model.vocab')
-    corpus_path = os.path.join(savepath, 'corpus.txt')
-    if not os.path.exists(savepath):
-        os.makedirs(savepath)
-        dataset.set_iterator_mode("Sentence", tag=False, sentence=True, tokenizer=lambda x: x)
-        with open(corpus_path, 'w') as f:
-            f.write('\n'.join(dataset))
-        spm.SentencePieceTrainer.Train('--input={} --model_prefix=model --vocab_size={}'.format(corpus_path, vocab_size))
-        shutil.move('./model.model', model_path)
-        shutil.move('./model.vocab', vocab_path)
-    sp = spm.SentencePieceProcessor()
-    sp.load(model_path)
-    return sp
 
 class WVAverageModel(object):
     def __init__(self, wvmodel, savepath):
@@ -189,44 +175,135 @@ class WVAverageModel(object):
     def load_wvmodel(self, model_path):
         self.wvmodel = Word2Vec.load(model_path)
 
+class MyGloVeModel(object):
+    def fit(self, sentences, size, window, iter, workers=None, **kwargs):
+        self.corpus = GloveCorpus()
+        self.model = GloveModel(no_components=size, **kwargs) 
+        self.corpus.fit(corpus=sentences, window=window, ignore_missing=True)
+        self.model.fit(matrix=self.corpus.matrix, epochs=iter, no_threads=workers or multiprocessing.cpu_count(), verbose=True)
+        self.wv = Word2VecKeyedVectors(size)
+        for word, wid in self.corpus.dictionary.items():
+            print("add", word, wid, self.model.word_vectors[wid][:5], "...")
+            self.wv.add(word, self.model.word_vectors[wid], True)
+    
+    def save(self, savepath):
+        os.makedirs(savepath, exist_ok=True)
+        self.corpus.save(os.path.join(savepath, "corpus.model"))
+        self.model.save(os.path.join(savepath, "model.model"))
+        self.wv.save(os.path.join(savepath, "word_vectors.model"))
+    
+    @classmethod
+    def load(cls, savepath):
+        glove = cls()
+        glove.corpus = GloveCorpus.load(os.path.join(savepath, "corpus.model"))
+        glove.model = GloveModel.load(os.path.join(savepath, "model.model"))
+        glove.wv = Word2VecKeyedVectors.load(os.path.join(savepath, "word_vectors.model"))
+        return glove
+
+def _get_wvmodel_class(wvmodel_name):
+    try:
+        return {
+                "word2vec": Word2Vec,
+                "fasttext": FastText,
+                "glove": MyGloVeModel,
+        }[wvmodel_name.lower()]
+    except:
+        raise Exception("There is no wvmodel named "+str(wvmodel_name))
+        
 class SWEMLayerBase(ModelLayerBase):
     def __init__(self, level, savepath):
         self.level = level
         self.savepath = savepath
-        self.wvmodel_path = os.path.join(self.savepath,'..', 'wvmodel.model')
-        self.spm_path = os.path.join(self.savepath,'..', 'spm')
+        self.wvmodel_path = os.path.join(self.savepath, '..', 'wvmodel')
+        self.spm_path = os.path.join(self.savepath, '..', 'spm')
         self.model = None
         self.init_vecs()
+        self._tokenizer = None
+    
+    @property
+    def tokenizer(self):
+        assert self.tokenizer_type, "You must first train model before call tokenizer"
+        if self.tokenizer_type == "spm":
+            self._tokenizer = self._tokenizer or load_spm(self.spm_path).EncodeAsPieces
+        elif self.tokenizer_type == "mecab":
+            self._tokenizer = self._tokenizer or Morph().surfaces
+        else:
+            raise "There is no tokenizer named "+str(self.tokenizer_type)
+        return self._tokenizer
+    
+    def tokenize(self, text):
+        return self._tokenizer(text)
     
     def init_vecs(self):
         self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
+        
+    def train_wvmodel(self, dataset, vocab_size, wvmodel="word2vec",**kwargs):
+        if self.wvmodel_class == Word2Vec:
+            self.wvmodel = Word2Vec(
+                    sentences = dataset,
+                    size = kwargs.get("size") or 500,
+                    window = kwargs.get("window") or 4,
+                    min_count= kwargs.get("min_count") or 10,
+                    iter =kwargs.get("iter") or 10,
+                    max_vocab_size=vocab_size,
+                    workers=multiprocessing.cpu_count(),
+                    **kwargs
+                )
+        elif self.wvmodel_class == FastText:
+            self.wvmodel = FastText(
+                    sentences = dataset, 
+                    size = kwargs.get("size") or 500,
+                    window = kwargs.get("window") or 4,
+                    min_count = kwargs.get("min_count") or 10,
+                    iter =kwargs.get("iter") or 10,
+                    max_vocab_size=vocab_size,
+                    workers=multiprocessing.cpu_count(),
+                    **kwargs
+                )
+        elif self.wvmodel_class == MyGloVeModel:
+            self.wvmodel = MyGloVeModel()
+            self.wvmodel.fit(
+                    sentences = dataset, 
+                    size = kwargs.get("size") or 500,
+                    window = kwargs.get("window") or 4,
+                    iter =kwargs.get("iter") or 10,
+                    workers=multiprocessing.cpu_count(),
+                    **kwargs
+                )
+        self.wvmodel.save(self.wvmodel_path)
+
+    def prepare_tokenizer(self, dataset, tokenizer_type, vocab_size):
+        self.tokenizer_type = tokenizer_type
+        if tokenizer_type == 'spm':
+            get_spm(dataset, self.spm_path, vocab_size)
     
-    def train(self, dataset, tokenizer='mecab', vocab_size=16000):
-        if tokenizer == 'spm':
-            spm = get_spm(dataset, self.spm_path, vocab_size=int(vocab_size))
-            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
-        else:
-            _tokenizer = 'mecab'
+    def train(self, dataset, tokenizer='mecab', vocab_size=16000, wvmodel="word2vec", **kwargs):
+        vocab_size = int(vocab_size)
+        self.prepare_tokenizer(dataset, tokenizer, vocab_size)
+        self.wvmodel_class = _get_wvmodel_class(wvmodel)
         if os.path.exists(self.wvmodel_path):
             self.load_wvmodel()
         else:
-            dataset.set_iterator_mode("Law", tag=False, sentence=True, tokenizer=_tokenizer)
-            self.wvmodel = Word2Vec(
-                    sentences = dataset,
-                    size = 500,
-                    window = 4,
-                    min_count=10,
-                    max_vocab_size=vocab_size,
-                    workers=multiprocessing.cpu_count()
-                    )
-            self.wvmodel.save(self.wvmodel_path)
-        dataset.set_iterator_mode(self.level, tag=True, sentence=True, tokenizer=_tokenizer)
+            text_unit = kwargs.get("text_unit") or dataset.levels[0]
+            text_unit = text_unit.__name__ if issubclass(text_unit, TreeElement) else text_unit
+            dataset.set_iterator_mode(text_unit, tag=False, sentence=True, tokenizer=self.tokenizer)
+            self.train_wvmodel(dataset, vocab_size=vocab_size, **kwargs)
+        dataset.set_iterator_mode(self.level, tag=True, sentence=True, tokenizer=self.tokenizer)
         with self.vecs.write_batch() as wb:
             for tag, text in dataset:
                 if not isinstance(tag, str):
                     print('WARNING: text tag is not str (type {})'.format(type(tag)))
                     tag = str(tag)
                 wb[tag] = self._calc_vec(text)
+    
+    def vectorize_text(self, text, text_key=None):
+        if text_key and text_key in vecs:
+            return self.vecs[text_key]
+        words = text if isinstance(text, list) else self.tokenizer(text)
+        vec = self._calc_vec(words)
+        if text_key:
+            self.vecs[text_key] = vec
+        return vec
     
     def _calc_vec(self, text):
         raise "Not implemented"
@@ -235,6 +312,7 @@ class SWEMLayerBase(ModelLayerBase):
         tmp_wvmodel = self.wvmodel
         self.wvmodel = None
         del self.vecs
+        del self._tokenizer
         with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
             pickle.dump(self, f)
         self.init_vecs()
@@ -254,7 +332,7 @@ class SWEMLayerBase(ModelLayerBase):
         return self.vecs[key]
     
     def load_wvmodel(self):
-        self.wvmodel = Word2Vec.load(self.wvmodel_path)
+        self.wvmodel = self.wvmodel_class.load(self.wvmodel_path)
     
     def __str__(self):
         return "WVAModel"
@@ -382,9 +460,12 @@ class Doc2VecLayer(ModelLayerBase):
         self.model = Doc2Vec(
             documents = dataset,
             dm = 1,
-            vector_size=500,
-            window=4,
-            min_count=10,
+            vector_size=300,
+            sample=0.000001,
+            negative=5,
+            window=5,
+            min_count=1,
+            epochs=400,
             workers=multiprocessing.cpu_count()
             )
         

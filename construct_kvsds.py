@@ -12,11 +12,15 @@ parser.add_argument('--levels', '-l', nargs='*', default=['Law', 'Article', 'Sen
                     help='layer level')
 parser.add_argument('--maxsize', '-m', default='None',
                     help='an integer government code for the constructor')
+parser.add_argument('--keywords', nargs='*', default=None,
+                    help='keywords for restrict by or search of law name')
 parser.add_argument('--test', default=False, action="store_true",
                     help='debug mode')
 args = parser.parse_args()
 
 def decode_gc(gcs):
+    if gcs.lower() == 'all':
+        return range(1,48)
     if re.match("\d+$", gcs):
         return [int(gcs)]
     m = re.match("(\d+)-(\d+)$", gcs)
@@ -50,4 +54,6 @@ with dataset_conf.batch_update(DATASET_NAME) as sect:
     sect['only_reiki'] = ONLY_REIKI
     sect['only_sentence'] = True
     sect['maxsize'] = args.maxsize
+    if args.keywords:
+        sect['keywords'] = args.keywords
     dataset_conf.prepare_dataset()

@@ -189,13 +189,15 @@ class DatasetConfigBase(ABConfig):
     CONF_ENCODERS = {
             'levels': lambda l: ','.join([x if isinstance(x, str) else x.__name__ for x in l]),
             'gov_codes': _gov_codes_encoder,
+            'keywords': lambda x: ','.join(x) if x is not None else None
             }
     CONF_DECODERS = {
             'levels': lambda l: [getattr(graph_etypes, x) for x in l.split(',')],
             'only_sentence': lambda x: x == 'True',
             'only_reiki': lambda x: x == 'True',
             'gov_codes': lambda x: ['{0:02}'.format(v) for v in range(1,47)] if x == 'ALL' else ([] if x == 'None' else re.split(', ', x)),
-            'maxsize': lambda x: None if x == 'None' else int(x)
+            'maxsize': lambda x: None if x == 'None' else int(x),
+            'keywords': lambda x: re.split(',', x)
             }
     DEFAULT_SECTION = 'COMMON'
 
@@ -234,7 +236,7 @@ class DatasetKVSConfig(DatasetConfigBase):
             return dataset
         for path in self.iter_dataset_paths():
             print(path)
-            dataset.register_directory(path, overwrite=True, maxsize=self.get('maxsize', None))
+            dataset.register_directory(path, overwrite=True, maxsize=self.get('maxsize', None), keywords=self.get('keywords', None))
         additional_govs = self['gov_codes']
         with self.temporal_section_change(self.DEFAULT_SECTION):
             self['gov_codes'] = self['gov_codes'] + additional_govs

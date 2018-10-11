@@ -42,4 +42,4 @@ else:
     dsc.change_section(args.dataset)
     levels = dsc['levels']
 for l in levels:
-    layer_conf.create_layer(args.dataset, model, l, args.name, **kwargs)
+    layer_conf.create_layer(args.dataset, model, l.__name__, args.name, **kwargs)

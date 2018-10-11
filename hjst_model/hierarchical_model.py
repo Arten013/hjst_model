@@ -62,8 +62,6 @@ class HierarchicalModel(object):
     
     def topk_comptable(self, dataset, query, k, threshold, level, root_threshold=None):
         qlevel = re.split('\(', os.path.split(query)[1])[0]
-        
-        # get similar law tags and vectors(= simple method output)
         dataset.set_iterator_mode(level=qlevel, tag=True, sentence=False)
         law_tags = list(dataset)
         _, law_index = self.create_index(qlevel, law_tags)
@@ -77,7 +75,6 @@ class HierarchicalModel(object):
                 k -= 1
                 continue
             target_law_tags.append(law_tags[i])
-
         return self.comptable(dataset, query, target_law_tags[:k], threshold, level)
     
     

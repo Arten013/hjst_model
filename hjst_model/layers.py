@@ -11,9 +11,7 @@ from copy import copy
 import shutil
 import numpy as np
 import pickle
-import editdistance
 import multiprocessing
-from neo4j.v1 import GraphDatabase
 from jstatutree import kvsdict
 from jstatutree.tree_element import TreeElement
 from sklearn.decomposition import TruncatedSVD
@@ -25,50 +23,98 @@ from .tokenizer import load_spm, get_spm, Morph
 
 
 class LayerBase(object):
-    def refine_scored_pairs(self, scored_pairs, threshold):
-        for k1, k2, _ in scored_pairs:
-            score = self.compare(k1, k2)
-            scored_pairs.add_scored_pair(k1, k2, score)
-
-    def compare(self, elem1, elem2):
-        pass
-
-class MethodLayerBase(LayerBase):
-    def __init__(self, dataset, level):
-        self.dataset = dataset
-        self.level = level
-
-    @classmethod
-    def is_model(self):
-        return False
+    __slots__ = [
+            'level',
+            'savepath',
+            'spm_path',
+            'vecs',
+            '_tokenizer',
+            'tokenizer_type'
+        ]
     
-    def compare_by_idvectors(self, vec1, vec2):
-        return self.idvector_to_wvmatrix(vec1) * self.idvector_to_wvmatrix(vec2).T
-    
-    def idvector_to_wvmatrix(self, id_vec):
-        return np.matrix([self[_id] for _id in id_vec])
-
-class ModelLayerBase(LayerBase):
-    def __init__(self, level, savepath):
+    def __init__(self, level, savepath, **kwargs):
         self.level = level
         self.savepath = savepath
-        self.model = None
+        self.spm_path = os.path.join(self.savepath, '..', 'spm')
+        self.init_vecs()
+        self._tokenizer = None
+        self.tokenizer_type = None
+
+    def _calc_vec(self, text):
+        raise "Not implemented"
+        
+    def init_vecs(self):
+        vecspath = os.path.join(self.savepath, 'vecs.ldb')
+        print('Load kvsdict from the path below:')
+        print(vecspath)
+        self.vecs = kvsdict.KVSDict(vecspath)
+        
+    @property
+    def tokenizer(self):
+        assert self.tokenizer_type, "You must first train model before call tokenizer"
+        if self.tokenizer_type == "spm":
+            self._tokenizer = self._tokenizer or load_spm(self.spm_path).EncodeAsPieces
+        elif self.tokenizer_type == "mecab":
+            self._tokenizer = self._tokenizer or Morph().surfaces
+        else:
+            raise "There is no tokenizer named "+str(self.tokenizer_type)
+        return self._tokenizer
+    
+    def prepare_tokenizer(self, dataset, tokenizer_type, vocab_size):
+        self.tokenizer_type = tokenizer_type
+        if tokenizer_type == 'spm':
+            self._tokenizer = get_spm(dataset, self.spm_path, vocab_size).EncodeAsPieces
+            
+    def tokenize(self, text):
+        return text if isinstance(text, list) else self.tokenizer(text)
+    
+    def get(self, key, text, add_if_missing=False):
+        return self.vecs.get(key, self.add_vector_by_text(key, text))
+            
+    def add_vector_by_text(self, key, text):
+        vec = self.vectorize_text(text)
+        self[key] = vec
+        return vec
+            
+    def vectorize_text(self, text):
+        return self._calc_vec(self.tokenize(text))
 
     def save(self):
-        os.makedirs(os.path.dirname(self.savepath), exist_ok=True)
-        with open(self.savepath, "wb") as f:
+        self.vecs = None
+        self._tokenizer = None
+        with open(os.path.join(self.savepath, 'layer_instance.pkl'), "wb") as f:
             pickle.dump(self, f)
+        self.init_vecs()
 
     @classmethod
     def load(cls, path):
-        with open(path, "rb") as f:
-            return pickle.load(f)
+        with open(os.path.join(path, 'layer_instance.pkl'), "rb") as f:
+            loaded = pickle.load(f)
+        vardict = dict()
+        for varname in cls.__slots__:
+            if varname in ['vecs']:
+                continue
+            try:
+                vardict[varname] = getattr(loaded, varname)
+            except:
+                print('WARNING: loaded instance has no attribute', varname, '.')
+                print('The attribute skipped.')
+        del loaded
+        ret = cls(**vardict)
+        for k, v in vardict.items():
+            setattr(ret, k, v)
+        return ret
 
-    def train(self, dataset):
-        pass
+    def compare(self, elem1, elem2):
+        return np.dot(self.vecs[elem1], self.vecs[elem2])
+    
+    def train(self, dataset, tokenizer='mecab', vocab_size=8000, **kwargs):
+        assert self.__class__ != LayerBase, 'You cannot use LayerBase class without override.'
+        vocab_size = int(vocab_size)
+        self.prepare_tokenizer(dataset, tokenizer, vocab_size)
 
     def __getitem__(self, key):
-        return self.model[key]
+        return self.vecs[key]
 
     @classmethod
     def is_model(self):
@@ -77,44 +123,23 @@ class ModelLayerBase(LayerBase):
     def __str__(self):
         return self.__class__.__name__
     
-class AggregationLayerBase(ModelLayerBase):
+    def __del__(self):
+        if hasattr(self, 'vecs'):
+            del self.vecs
+    
+class AggregationLayerBase(LayerBase):
     def __init__(self, level, savepath):
         super().__init__(level, savepath)
         os.makedirs(self.savepath, exist_ok=True)
-        self.init_vecs()
-
-    def init_vecs(self):
-        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
     
     def train(self, dataset, base_layer):
         with self.vecs.write_batch() as wb:
             for pnode, cnodes in dataset.kvsdicts["edges"][self.level].items():
-                #print(pnode)
                 wb[pnode] = self._calc_vec(np.array([base_layer[n] for n in cnodes]))
-                
-    def __getitem__(self, key):
-        return self.vecs[key]
                 
     def _calc_vec(self, matrix):
         raise "You must implement aggregation function"
-
-    def save(self):
-        del self.vecs
-        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.init_vecs()
-
-    @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
-            self = pickle.load(f)
-        self.init_vecs()
-        return self
-
-    def compare(self, elem1, elem2):
-        v1, v2 = self.vecs[elem1], self.vecs[elem2]
-        return np.dot(v1, v2)
-
+        
 class AverageAGLayer(AggregationLayerBase):
     def _calc_vec(self, matrix):
         v = np.sum(matrix, axis=0)
@@ -125,55 +150,6 @@ class RandomAGLayer(AggregationLayerBase):
         print(matrix.shape)
         v = np.random.normal(loc=0, scale=1000, size=(matrix.shape[1],))
         return v/np.linalg.norm(v)
-
-class WVAverageModel(object):
-    def __init__(self, wvmodel, savepath):
-        self.wvmodel = wvmodel
-        self.savepath = savepath
-        os.makedirs(self.savepath, exist_ok=True)
-        self.init_vecs()
-
-    def init_vecs(self):
-        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
-
-    def train(self, tagged_texts):
-        with self.vecs.write_batch() as wb:
-            for tag, text in tagged_texts:
-                if not isinstance(tag, str):
-                    print('WARNING: text tag is not str (type {})'.format(type(tag)))
-                    tag = str(tag)
-                self.vecs[tag] = self._calc_vec(text)
-
-    def save(self):
-        self.wvmodel.save(os.path.join(self.savepath, 'wvmodel.model'))
-        tmp_wvmodel = self.wvmodel
-        self.wvmodel = None
-        del self.vecs
-        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.init_vecs()
-        self.wvmodel = tmp_wvmodel
-
-    def _calc_vec(self, text):
-        arr = np.array(
-                [self.wvmodel.wv[v] for v in text if v in self.wvmodel.wv]
-                )
-        if arr.shape == np.array([]).shape:
-            print("WARNING: a zero vector allocated for the text below:")
-            print(text)
-            return np.zeros(self.wvmodel.wv.vector_size)
-        v = np.sum(arr, axis=0)
-        return v/np.linalg.norm(v)
-
-    @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
-            self = pickle.load(f)
-        self.init_vecs()
-        return self
-
-    def load_wvmodel(self, model_path):
-        self.wvmodel = Word2Vec.load(model_path)
 
 class MyGloVeModel(object):
     def fit(self, sentences, size, window, iter, workers=None, **kwargs):
@@ -210,32 +186,15 @@ def _get_wvmodel_class(wvmodel_name):
     except:
         raise Exception("There is no wvmodel named "+str(wvmodel_name))
         
-class SWEMLayerBase(ModelLayerBase):
+class SWEMLayerBase(LayerBase):
+    __slots__ = LayerBase.__slots__ + [
+        'wvmodel_path',
+        'wbmodel'
+    ]
+    
     def __init__(self, level, savepath):
-        self.level = level
-        self.savepath = savepath
+        super().__init__(level, savepath)
         self.wvmodel_path = os.path.join(self.savepath, '..', 'wvmodel')
-        self.spm_path = os.path.join(self.savepath, '..', 'spm')
-        self.model = None
-        self.init_vecs()
-        self._tokenizer = None
-    
-    @property
-    def tokenizer(self):
-        assert self.tokenizer_type, "You must first train model before call tokenizer"
-        if self.tokenizer_type == "spm":
-            self._tokenizer = self._tokenizer or load_spm(self.spm_path).EncodeAsPieces
-        elif self.tokenizer_type == "mecab":
-            self._tokenizer = self._tokenizer or Morph().surfaces
-        else:
-            raise "There is no tokenizer named "+str(self.tokenizer_type)
-        return self._tokenizer
-    
-    def tokenize(self, text):
-        return self._tokenizer(text)
-    
-    def init_vecs(self):
-        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
         
     def train_wvmodel(self, dataset, vocab_size, wvmodel="word2vec",**kwargs):
         if self.wvmodel_class == Word2Vec:
@@ -271,15 +230,9 @@ class SWEMLayerBase(ModelLayerBase):
                     **kwargs
                 )
         self.wvmodel.save(self.wvmodel_path)
-
-    def prepare_tokenizer(self, dataset, tokenizer_type, vocab_size):
-        self.tokenizer_type = tokenizer_type
-        if tokenizer_type == 'spm':
-            get_spm(dataset, self.spm_path, vocab_size)
     
-    def train(self, dataset, tokenizer='mecab', vocab_size=16000, wvmodel="word2vec", **kwargs):
-        vocab_size = int(vocab_size)
-        self.prepare_tokenizer(dataset, tokenizer, vocab_size)
+    def train(self, dataset, tokenizer='mecab', vocab_size=8000, wvmodel="word2vec", **kwargs):
+        super().train(dataset, tokenizer, vocab_size)
         self.wvmodel_class = _get_wvmodel_class(wvmodel)
         if os.path.exists(self.wvmodel_path):
             self.load_wvmodel()
@@ -295,41 +248,12 @@ class SWEMLayerBase(ModelLayerBase):
                     print('WARNING: text tag is not str (type {})'.format(type(tag)))
                     tag = str(tag)
                 wb[tag] = self._calc_vec(text)
-    
-    def vectorize_text(self, text, text_key=None):
-        if text_key and text_key in vecs:
-            return self.vecs[text_key]
-        words = text if isinstance(text, list) else self.tokenizer(text)
-        vec = self._calc_vec(words)
-        if text_key:
-            self.vecs[text_key] = vec
-        return vec
-    
-    def _calc_vec(self, text):
-        raise "Not implemented"
 
     def save(self):
         tmp_wvmodel = self.wvmodel
         self.wvmodel = None
-        del self.vecs
-        del self._tokenizer
-        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.init_vecs()
+        super().save()
         self.wvmodel = tmp_wvmodel
-
-    @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
-            layer = pickle.load(f)
-        layer.init_vecs()
-        return layer
-
-    def compare(self, elem1, elem2):
-        return np.dot(self.vecs[elem1], self.vecs[elem2])
-
-    def __getitem__(self, key):
-        return self.vecs[key]
     
     def load_wvmodel(self):
         self.wvmodel = self.wvmodel_class.load(self.wvmodel_path)
@@ -368,59 +292,7 @@ class SWEMConcatLayer(SWEMLayerBase):
         v = np.concatenate([v1/np.linalg.norm(v1), v2/np.linalg.norm(v2)], axis=None)
         return v/np.linalg.norm(v)
 
-class WVAverageLayer(ModelLayerBase):
-    def train(self, dataset, tokenizer='mecab', vocab_size=16000):
-        if tokenizer == 'spm':
-            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'), vocab_size=int(vocab_size))
-            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
-        else:
-            _tokenizer = 'mecab'
-        dataset.set_iterator_mode(self.level, tag=False, sentence=True, tokenizer=_tokenizer)
-        wv = Word2Vec(
-                sentences = dataset,
-                size = 500,
-                window = 4,
-                min_count=10,
-                workers=multiprocessing.cpu_count()
-                )
-        dataset.set_iterator_mode(self.level, tag=True, sentence=True, tokenizer=_tokenizer)
-        self.model = WVAverageModel(wv, os.path.join(self.savepath, 'model_body'))
-        self.model.train(dataset)
-
-    def save(self):
-        self.model.save()
-        model = self.model
-        self.model = None
-        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.model = model
-
-    @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
-            layer = pickle.load(f)
-        layer.model = WVAverageModel.load(os.path.join(path, 'model_body'))
-        return layer
-
-    def compare(self, elem1, elem2):
-        v1, v2 = self.model.vecs[elem1], self.model.vecs[elem2]
-        return np.dot(v1, v2)
-
-    def __getitem__(self, key):
-        return self.model.vecs[key]
-    
-    def __str__(self):
-        return "WVAModel"
-
-class RandomLayer(ModelLayerBase):
-    def __init__(self, level, savepath):
-        super().__init__(level, savepath)
-        os.makedirs(self.savepath, exist_ok=True)
-        self.init_vecs()
-
-    def init_vecs(self):
-        self.vecs = kvsdict.KVSDict(os.path.join(self.savepath, 'vecs.ldb'))
-    
+class RandomLayer(LayerBase):
     def train(self, dataset, scale=1, size=500):
         dataset.set_iterator_mode(self.level, tag=True, sentence=False)
         with self.vecs.write_batch() as wb:
@@ -428,36 +300,13 @@ class RandomLayer(ModelLayerBase):
                 #print(tag)
                 v = np.random.normal(loc=0, scale=float(scale), size=(int(size),))
                 wb[tag] = v/np.linalg.norm(v)
-                
-    def __getitem__(self, key):
-        return self.vecs[key]
-
-    def save(self):
-        del self.vecs
-        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.init_vecs()
-
-    @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
-            self = pickle.load(f)
-        self.init_vecs()
-        return self
-
-    def compare(self, elem1, elem2):
-        v1, v2 = self.vecs[elem1], self.vecs[elem2]
-        return np.dot(v1, v2)
     
-class Doc2VecLayer(ModelLayerBase):
-    def train(self, dataset, tokenizer='mecab', vocab_size=16000):
-        if tokenizer == 'spm':
-            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'), vocab_size=int(vocab_size))
-            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
-        else:
-            _tokenizer = 'mecab'
-        dataset.set_iterator_mode(self.level, gensim=True, tokenizer=_tokenizer)
-        self.model = Doc2Vec(
+class Doc2VecLayer(LayerBase):
+    def train(self, dataset, tokenizer='mecab', vocab_size=8000, **kwargs):
+        super().train(dataset, tokenizer, vocab_size)
+        dataset.set_iterator_mode(self.level, gensim=True, tokenizer=self.tokenizer)
+        print('train doc2vec model')
+        dvmodel = Doc2Vec(
             documents = dataset,
             dm = 1,
             vector_size=300,
@@ -465,48 +314,41 @@ class Doc2VecLayer(ModelLayerBase):
             negative=5,
             window=5,
             min_count=1,
-            epochs=400,
+            epochs=10,
             workers=multiprocessing.cpu_count()
             )
-        
-    def __getitem__(self, key):
-        return self.model.docvecs[key]
+        print('save doc2vec model')
+        dvmodel.save(os.path.join(self.savepath, 'doc2vec.model'))
+        dataset.set_iterator_mode(self.level, tag=True, sentence=False)
+        print('set vectors to kvsdict')
+        with self.vecs.write_batch() as wb:
+            for tag in list(dataset):
+                wb[tag] = dvmodel.docvecs[tag]
+        print('training complete')
 
     @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
-            layer = pickle.load(f)
-        layer.model = Doc2Vec.load(os.path.join(path, 'model_body'))
-        return layer
+    def load_dvmodel(cls, path):
+        return Doc2Vec.load(os.path.join(path, 'doc2vec.model'))
 
-    def save(self):
-        os.makedirs(self.savepath, exist_ok=True)
-        self.model.save(os.path.join(self.savepath, 'model_body'))
-        model = self.model
-        self.model = None
-        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.model = model
+class TfidfLayer(LayerBase):
+    __slots__ = LayerBase.__slots__ + [
+        'tag_idx_dict',
+        'transformer',
+        'matrix'
+    ]
+   
+            
+    def _calc_vec(self, text):
+        return self.transformer.transform(text)
 
-    def compare(self, elem1, elem2):
-        return self.model.docvecs.similarity(elem1, elem2)
-
-    def __str__(self):
-        return "Doc2VecModel"
-
-class TfidfLayer(ModelLayerBase):
-    def train(self, dataset, tokenizer='mecab', vocab_size=16000, idf=True, lsi_size=None):
+    def train(self, dataset, tokenizer='mecab', vocab_size=8000, idf=True, lsi_size=None):
+        super().train(dataset, tokenizer, vocab_size)
+        vocab_size = int(vocab_size)
         idf = bool(idf)
         lsi_size = int(lsi_size) if lsi_size else None
-        vocab_size = int(vocab_size)
-        if tokenizer == 'spm':
-            spm = get_spm(dataset, os.path.join(self.savepath, 'spm'), vocab_size=int(vocab_size))
-            _tokenizer = lambda x: [w for w in spm.EncodeAsPieces(x)]
-        else:
-            _tokenizer = 'mecab'
-        dataset.set_iterator_mode(self.level, tag=True, sentence=False, tokenizer=_tokenizer)
+        dataset.set_iterator_mode(self.level, tag=True, sentence=False, tokenizer=self.tokenizer)
         self.tag_idx_dict = {k:i for i, k in enumerate(dataset)}
-        dataset.set_iterator_mode(self.level, tag=False, sentence=True, tokenizer=_tokenizer)
+        dataset.set_iterator_mode(self.level, tag=False, sentence=True, tokenizer=self.tokenizer)
         count_vectorizer = CountVectorizer(
             input='content',
             #max_df=0.5, 
@@ -525,121 +367,24 @@ class TfidfLayer(ModelLayerBase):
                         )
             )
         self.transformer = Pipeline(steps)
-        self.mat = self.transformer.fit_transform([" ".join(s) for s in dataset])
+        self.matrix = self.transformer.fit_transform([" ".join(s) for s in dataset])
+        dataset.set_iterator_mode(self.level, tag=True, sentence=False)
+        with self.vecs.write_batch() as wb:
+            for tag in list(dataset):
+                wb[tag] = self.matrix[self.tag_idx_dict[tag]]
 
     def save(self):
         os.makedirs(self.savepath, exist_ok=True)
-        tmp_mat = self.mat
+        tmp_mat = self.matrix
         with open(os.path.join(self.savepath, 'matrix.npy'), "wb") as f:
-            np.save(f, self.mat)
-            del self.mat
-        with open(os.path.join(self.savepath, 'layer_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.mat = tmp_mat
-        
-    @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'layer_class.cls'), "rb") as f:
-            layer = pickle.load(f)
+            np.save(f, self.matrix)
+            del self.matrix
+        super().save()
+        self.matrix = tmp_mat
+    
+    def matrix_idx(self, tag):
+        return self.tag_idx_dict[key]
+    
+    def load_matrix(self, matrix):
         with open(os.path.join(path, 'matrix.npy'), "rb") as f:
-            layer.mat = np.load(f)
-        return layer
-
-    def __getitem__(self, key):
-        return self.mat[self.tag_idx_dict[key]]
-
-    def compare(self, elem1, elem2):
-        return self.model.docvecs.similarity(elem1, elem2)
-
-class LevenLayer(MethodLayerBase):
-    def save(self):
-        pass
-
-    @classmethod
-    def load(cls, path):
-        raise Exception()
-
-    def train(self, dataset):
-        self.dataset = dataset
-
-    def compare(self, elem1, elem2, *args, **kwargs):
-        s1 = self.dataset.sentence_dict[self.level][elem1]
-        s2 = self.dataset.sentence_dict[self.level][elem2]
-        ret = 1 - editdistance.eval(s1, s2)/max(len(s1),len(s2))
-        return ret
-
-class GDBWVAverageModel(WVAverageModel):
-    def __init__(self, wvmodel, savepath, gdb, level):
-        self.wvmodel = wvmodel
-        self.savepath = savepath
-        os.makedirs(self.savepath, exist_ok=True)
-        self.uri = gdb.uri
-        self.auth = gdb.auth
-        self.driver = GraphDatabase.driver(uri=self.uri, auth=self.auth)
-        self.level = level if isinstance(level, str) else level.__name__
-
-
-    def train(self, tagged_texts):
-        with self.driver.session() as session:
-            for tag, text in tagged_texts:
-                if not isinstance(tag, str):
-                    print('WARNING: text tag is not str (type {})'.format(type(tag)))
-                    tag = str(tag)
-                session.run(
-                        """
-                            MATCH (n:%s{id: '%s'})
-                            SET n.wva_vec = $vec
-                        """ % (self.level+'s', tag), vec=self._calc_vec(text).tolist())
-
-    def __getitem__(self, key):
-        pc, mc, fc, num = re.split('/', key)
-        with self.driver.session() as session:
-            return session.run("""
-                    MATCH (p:Prefectures)-->(m:Municipalities)-->(s:Statutories)-[:HAS_ELEM*]->(n:%s)
-                    WHERE p.code = $pc
-                    AND m.code = $mc
-                    AND s.code = $fc
-                    AND n.eid = $eid
-                    RETURN n.wva_vec
-                    LIMIT 1
-                    """ % self.level+'s',
-                    pc=pc, mc=mc, fc=fc, eid=key).single()[0]
-
-    def save(self):
-        self.wvmodel.save(os.path.join(self.savepath, 'wvmodel.model'))
-        tmp_wvmodel = self.wvmodel
-        self.wvmodel = None
-        del self.driver
-        with open(os.path.join(self.savepath, 'model_class.cls'), "wb") as f:
-            pickle.dump(self, f)
-        self.wvmodel = tmp_wvmodel
-
-    @classmethod
-    def load(cls, path):
-        with open(os.path.join(path, 'model_class.cls'), "rb") as f:
-            self = pickle.load(f)
-        self.driver = GraphDatabase.driver(uri=self.uri, auth=self.auth)
-        return self
-
-    def load_wvmodel(self, model_path):
-        self.wvmodel = Word2Vec.load(model_path)
-
-class GDBWVAverageLayer(WVAverageLayer):
-    def train(self, dataset):
-        dataset.set_iterator_mode(self.level, tag=False, sentence=True)
-        wv = Word2Vec(
-                sentences = dataset,
-                size = 500,
-                window = 4,
-                min_count=10,
-                workers=multiprocessing.cpu_count()
-                )
-        dataset.set_iterator_mode(self.level, tag=True, sentence=True)
-        self.model = GDBWVAverageModel(wv, os.path.join(self.savepath, 'model_body'), dataset.gdb, self.level)
-        self.model.train(dataset)
-
-    def compare(self, elem1, elem2):
-        return np.dot(self.model[elem1], self.model[elem2])
-
-    def __str__(self):
-        return "GDBWVAModel"
+            return np.load(f)

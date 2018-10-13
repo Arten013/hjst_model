@@ -15,6 +15,8 @@ parser.add_argument('--levels', '-l', nargs='*', default=None,
                     help='layer level')
 parser.add_argument('--params', '-p', nargs='*',
         help='optional model parameter (format key:value)')
+parser.add_argument('--force', default=False, action="store_true",
+                    help='create model unless the same one has already existed.')
 parser.add_argument('--test', default=False, action="store_true",
                     help='debug mode')
 args = parser.parse_args()
@@ -42,4 +44,4 @@ else:
     dsc.change_section(args.dataset)
     levels = dsc['levels']
 for l in levels:
-    layer_conf.create_layer(args.dataset, model, l.__name__, args.name, **kwargs)
+    layer_conf.create_layer(args.dataset, model, l.__name__, args.name, overwrite=args.force, **kwargs)

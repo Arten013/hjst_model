@@ -192,8 +192,8 @@ class SWEMLayerBase(LayerBase):
         'wbmodel'
     ]
     
-    def __init__(self, level, savepath):
-        super().__init__(level, savepath)
+    def __init__(self, level, savepath, **kwargs):
+        super().__init__(level, savepath, **kwargs)
         self.wvmodel_path = os.path.join(self.savepath, '..', 'wvmodel')
         
     def train_wvmodel(self, dataset, vocab_size, wvmodel="word2vec",**kwargs):
@@ -232,6 +232,7 @@ class SWEMLayerBase(LayerBase):
         self.wvmodel.save(self.wvmodel_path)
     
     def train(self, dataset, tokenizer='mecab', vocab_size=8000, wvmodel="word2vec", **kwargs):
+        vocab_size = int(vocab_size)
         super().train(dataset, tokenizer, vocab_size)
         self.wvmodel_class = _get_wvmodel_class(wvmodel)
         if os.path.exists(self.wvmodel_path):
@@ -336,7 +337,6 @@ class TfidfLayer(LayerBase):
         'transformer',
         'matrix'
     ]
-   
             
     def _calc_vec(self, text):
         return self.transformer.transform(text)

@@ -1,6 +1,7 @@
 from abconfig.abconfig import ABConfig, NEOConfig
 import multiprocessing
 import os
+import shutil
 from .hierarchical_dataset import HierarchicalDataset, HierarchicalGraphDataset
 from jstatutree.graphtree import graph_etypes, graph_lawdata
 from jstatutree.etypes import get_etypes
@@ -144,12 +145,17 @@ class LayerModelConfig(ABConfig):
                 del ds
         return name        
         
-    def create_layer(self, trainingset_name, model_class, level, model_name = None, **kwargs):
+    def create_layer(self, trainingset_name, model_class, level, model_name = None, overwrite=False, **kwargs):
         name = model_name or self.get_model_name(trainingset_name, model_class)
         name = name+"-"+level
         if self.has_section(name):
-            print('Layer', name, 'has already exists.')
-            return
+            if overwrite:
+                self.change_section(name)
+                shutil.rmtree(self.model_path)
+                self.remove_section(name)
+            else:
+                print('Layer', name, 'has already exists.')
+                return
         with self.batch_update(name) as sect:
             sect['model'] = model_class
             sect['trainingset'] = trainingset_name

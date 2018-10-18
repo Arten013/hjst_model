@@ -18,6 +18,14 @@ parser.add_argument('--test', default=False, action="store_true",
                     help='debug mode')
 args = parser.parse_args()
 
+def iter_gpath(gcodes, basepath):
+    for gcode in gcodes:
+        if re.match('\d{2}'):
+            yield from (x for x in Path(basepath, gcode).iterdir() if x.is_dir() and re.match(x.name, '\d{6}'))
+        elif re.match('\d{6}'):
+            yield Path(basepath, gcode[:2], gcode)
+        else:
+            raise ValueError()
 def decode_gc(gcs):
     if gcs.lower() == 'all':
         return range(1,48)
@@ -32,7 +40,7 @@ test_dir = "/test" if args.test else ""
 DATASET_NAME = args.name
 ROOT_CODE = [gc for gcl in args.govcode for gc in decode_gc(gcl)]
 CONF_DIR = './configs{}'.format(test_dir)
-REIKISET_DIR = '../home/reikiset'
+REIKISET_DIR = '../reikiset'
 KVS_DIR = './results/hjst{}/kvsdataset'.format(test_dir)
 LEVELS = args.levels
 ONLY_REIKI = True
@@ -49,7 +57,8 @@ except:
 #     print('Dataset', DATASET_NAME, 'has already exists.')
 #     exit()
 with dataset_conf.batch_update(DATASET_NAME) as sect:
-    sect['gov_codes'] =  [gc for gcl in args.govcode for gc in decode_gc(gcl)]
+    gcodes = [gc for gcl in args.govcode for gc in decode_gc(gcl)]
+    sect['gov_codes'] =  gcodes
     sect['levels'] = LEVELS
     sect['only_reiki'] = ONLY_REIKI
     sect['only_sentence'] = True

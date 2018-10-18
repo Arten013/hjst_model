@@ -19,6 +19,7 @@ from sklearn.pipeline import Pipeline
 from glove import Glove as GloveModel
 from glove import Corpus as GloveCorpus
 from .tokenizer import load_spm, get_spm, Morph
+from .hierarchical_dataset import ReikiKVSDict
 
 
 
@@ -189,7 +190,8 @@ def _get_wvmodel_class(wvmodel_name):
 class SWEMLayerBase(LayerBase):
     __slots__ = LayerBase.__slots__ + [
         'wvmodel_path',
-        'wbmodel'
+        'wbmodel',
+        'wbmodel_class'
     ]
     
     def __init__(self, level, savepath, **kwargs):
@@ -258,9 +260,6 @@ class SWEMLayerBase(LayerBase):
     
     def load_wvmodel(self):
         self.wvmodel = self.wvmodel_class.load(self.wvmodel_path)
-    
-    def __str__(self):
-        return "WVAModel"
 
 class SWEMAverageLayer(SWEMLayerBase):        
     def _calc_vec(self, text):
@@ -292,6 +291,51 @@ class SWEMConcatLayer(SWEMLayerBase):
         v1, v2 = np.sum(arr, axis=0), np.max(arr, axis=0)
         v = np.concatenate([v1/np.linalg.norm(v1), v2/np.linalg.norm(v2)], axis=None)
         return v/np.linalg.norm(v)
+    
+class WMDLayer(SWEMLayerBase):    
+    @property
+    def docs(self):
+        return self.vecs
+    
+    def _calc_vec(self, text):
+        return text
+    
+    def get(self, key, text, add_if_missing=False):
+        raise 'WMDLayer do not have document vectors.'
+            
+    def add_vector_by_text(self, key, text):
+        raise 'WMDLayer do not have document vectors.'
+            
+    def vectorize_text(self, text):
+        raise 'WMDLayer do not have document vectors.'
+        
+    def add_texts(self, *texts):
+        with self.vecs.write_batch() as wb:
+            for tag, text in texts:
+                if not isinstance(tag, str):
+                    print('WARNING: text tag is not str (type {})'.format(type(tag)))
+                    tag = str(tag)
+                wb[tag] = self._calc_vec(text)
+    
+    def compare_by_texts(self, text1, text2):
+        return self.wvmodel.wv.wmdistance(self.tokenize(text1),  self.tokenize(text2))
+
+    def save(self):
+        self._tokenizer = None
+        with open(os.path.join(self.savepath, 'layer_instance.pkl'), "wb") as f:
+            pickle.dump(self, f)
+    
+    @classmethod
+    def load(cls, path):
+        layer = super().load(cls, path)
+        layer.load_wvmodel()
+        return layer
+
+    def compare(self, elem1, elem2):
+        return self.wvmodel.wv.wmdistance(self.vecs[elem1], self.vecs[elem2])
+
+    def __getitem__(self, key):
+        raise 'WMDLayer do not have document vectors.'
 
 class RandomLayer(LayerBase):
     def train(self, dataset, scale=1, size=500):

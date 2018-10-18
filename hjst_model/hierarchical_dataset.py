@@ -3,7 +3,7 @@ from jstatutree.mltree import ml_etypes
 from jstatutree.xmltree import xml_lawdata, xml_etypes
 from jstatutree.graphtree import graph_etypes, graph_lawdata
 from jstatutree.myexceptions import *
-from jstatutree.etypes import sort_etypes
+from jstatutree.etypes import sort_etypes, Sentence
 from jstatutree.kvsdict import KVSDict
 from gensim.models.doc2vec import TaggedDocument
 
@@ -27,24 +27,381 @@ def find_all_files(directory, extentions=None):
             if extentions is None or os.path.splitext(file)[1] in extentions:
                 yield os.path.join(root, file)
 
-class HierarchicalDataset(JStatutreeKVS):
-    def __init__(self, dbpath, dataset_name, levels, only_reiki=True, only_sentence=False, *args, **kwargs):
-        super().__init__(path=dbpath)
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import plyvel
+from queue import Queue
+import shutil
+import re
+import pickle
+
+class ReikiKVSDictDB(object):
+    def __init__(self, basepath, thread_num=5):
+        self.basepath = Path(basepath)
+        self.thread_num = thread_num
+        self.workers = ThreadPoolExecutor(max_workers=self.thread_num)
+    
+    def remove_files(self):
+        shutil.rmtree(self.basepath)
+    
+    mcode_ptn = re.compile('\d{6}')
+    @property
+    def mcodes(self):
+        if not self.basepath.exists():
+            return []
+        return [x.name for x in self.basepath.iterdir() if x.is_dir() and re.match(self.__class__.mcode_ptn, x.name)]
+        
+    def get_db_path(self, mcode):
+        return self.basepath / Path(mcode)
+        
+    def get_db(self, mcode):
+        dbpath = self.get_db_path(mcode)
+        if not dbpath.exists():
+            os.makedirs(str(dbpath))
+        return  plyvel.DB(str(dbpath), create_if_missing=True)
+        
+    def __getitem__(self, key):
+        ret = self.get(key)
+        if ret is None:
+            raise KeyError(key, 'is not registered in the db', self.basepath)
+        return ret
+
+    def get(self, key, default=None):
+        mcode, item_key = self._encode_key(key)
+        if not self.get_db_path(mcode).exists():
+            return default
+        db = self.get_db(mcode)
+        ret =  pickle.loads(db.get(item_key, default=default))
+        db.close()
+        return ret
+    
+    def put(self, key, value):
+        mcode, item_key = self._encode_key(key)
+        db = self.get_db(mcode)
+        db.put(item_key, pickle.dumps(value))
+        db.close()
+    
+    def delete(self, key):
+        mcode, item_key = self._encode_key(key)
+        db = self.get_db(mcode)
+        db.delete(item_key)
+        for i in db.iterator(include_key=True, include_value=False):
+            break
+        else:
+            shutli.rmtree(self.get_db_path(mcode))
+        db.close()
+    
+    @staticmethod
+    def _encode_key(key):
+        parts = Path(key).parts
+        return parts[1], os.path.join(*parts[2:]).encode()
+    
+    @staticmethod
+    def _decode_key(mcode, item_key):
+        return os.path.join(mcode[:2], mcode, item_key.decode())
+    
+    def is_empty(self):
+        return len(self.mcodes) == 0
+    
+    def items(self):
+        for mcode in sorted(self.mcodes, key=lambda x:int(x)):
+            db = self.get_db(mcode)
+            for item_key, value in db.iterator(include_key=True, include_value=True):
+                yield self._decode_key(mcode, item_key), pickle.loads(value)
+
+    def keys(self):
+        for mcode in sorted(self.mcodes, key=lambda x:int(x)):
+            db = self.get_db(mcode)
+            for item_key in db.iterator(include_key=True, include_value=False):
+                yield self._decode_key(mcode, item_key)
+
+    def values(self):
+        for mcode in sorted(self.mcodes, key=lambda x:int(x)):
+            db = self.get_db(mcode)
+            for value in db.iterator(include_key=False, include_value=True):
+                yield pickle.loads(value)
+    
+    def _qiter_base(self, enqueue_func):
+        queue = Queue()
+        enqueue_func.queue = queue
+        mcodes = self.mcodes
+        for mcode in sorted(mcodes, key=lambda x:int(x)):
+            self.workers.submit(enqueue_func, mcode)
+        running_count = len(mcodes)
+        while running_count > 0:
+            item = queue.get()
+            if item is None:
+                running_count -= 1
+            else:
+                yield item
+    
+    def qitems(self):
+        def enqueue_func(mcode):
+                queue = enqueue_func.queue
+                db = self.get_db(mcode)
+                for item_key, value in db.iterator(include_key=True, include_value=True):
+                    queue.put((self._decode_key(mcode, item_key), pickle.loads(value)))
+                queue.put(None)
+        for k, v in self._qiter_base(enqueue_func):
+            yield k, v
+
+    def qkeys(self):
+        def enqueue_func(mcode):
+                queue = enqueue_func.queue
+                db = self.get_db(mcode)
+                for item_key in db.iterator(include_key=True, include_value=False):
+                    queue.put(self._decode_key(mcode, item_key))
+                queue.put(None)
+        yield from self._qiter_base(enqueue_func)
+
+    def qvalues(self):
+        def enqueue_func(mcode):
+                queue = enqueue_func.queue
+                db = self.get_db(mcode)
+                for value in db.iterator(include_key=False, include_value=True):
+                    queue.put(pickle.loads(value))
+                queue.put(None)
+        yield from self._qiter_base(enqueue_func)
+
+class BatchReikiWriter(object):
+    def __init__(self, reikikvsdb, *wb_args, **wb_kwargs):
+        self.db = reikikvsdb
+        self.wb_args = wb_args
+        self.wb_kwargs = wb_kwargs
+        self.wbdict = dict()
+        self.dbdict = dict()
+    
+    def __setitem__(self, key, value):
+        mcode, item_key = self.db._encode_key(key)
+        if mcode not in self.wbdict:
+            db = self.db.get_db(mcode)
+            self.wbdict[mcode] = db.write_batch(*self.wb_args, **self.wb_kwargs)
+            self.dbdict[mcode] = db
+        #print(mcode, item_key, value)
+        self.wbdict[mcode].put(item_key, pickle.dumps(value))
+
+    def __delitem__(self, key):
+        mcode, item_key = self.db._encode_key(key)
+        if mcode not in self.wbdict():
+            db = self.db.get_db(mcode)
+            self.wbdict[mcode] = db.write_batch(*self.wb_args, **self.wb_kwargs)
+            self.dbdict[mcode] = db
+        self.wbdict[mcode].delete(item_key)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is not None:
+            return False
+        self.write()
+        return True
+    
+    
+    def write(self):
+        for wb in self.wbdict.values():
+            wb.write()
+        self.wbdict = {}
+        for mcode, db in self.dbdict.items():
+            for i in db.iterator(include_key=True, include_value=False):
+                db.close()
+                break
+            else:
+                db.close()
+                shutli.rmtree(self.db.get_db_path(mcode))
+        self.dbdict = {}
+    
+
+class ReikiKVSDict(object):
+    ENCODING = "utf8"
+
+    def __init__(self, path, thread_num=None, create_if_missing=True):
+        self.path = path
+        self.thread_num = thread_num or 5
+        self.db = ReikiKVSDictDB(self.path, self.thread_num)
+
+        if create_if_missing:
+            os.makedirs(self.path, exist_ok=True)
+    
+    @property
+    def path(self):
+        if "_path" not in self.__dict__:
+            self._path = None
+        return self._path
+
+    @path.setter
+    def path(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.splitext(path)[1] == "":
+            path += ".ldb"
+        self._path = path
+        
+    def to_dict(self):
+        return {k:v for k, v in self.items()}
+
+    def __setitem__(self, key, val):
+        self.db.put(key, val)
+
+    def __getitem__(self, key):
+        return self.db.get(key)
+
+    def __delitem__(self, key):
+        self.db.delete(key)
+
+    def get(self, key, default=None):
+        return self.db.get(key, default=default)
+        
+    def __len__(self):
+        l = 0
+        for _ in self.qkeys():
+            l += 1
+        return l
+    
+    def is_prefixed_db(self):
+        return False
+
+    def is_empty(self):
+        return self.db.is_empty()
+    
+    def write_batch_mapping(self, mapping, *args, **kwargs):
+        with BatchReikiWriter(self.db) as wv:
+            for k, v in mapping.items():
+                wv[k] = v
+            
+    def write_batch(self, *args, **kwargs): 
+        return BatchReikiWriter(self.db, *args, **kwargs)
+    
+    def items(self):
+        return self.db.items()
+
+    def keys(self):
+        return self.db.keys()
+
+    def values(self):
+        return self.db.values()
+
+    def qitems(self):
+        return self.db.qitems()
+
+    def qkeys(self):
+        return self.db.qkeys()
+
+    def qvalues(self):
+        return self.db.qvalues()
+
+
+
+
+import re, pickle
+class Lawcodes(object):
+    def __init__(self, path):
+        self.basepath = Path(path)
+        self.lcdict = {}
+        self.changed_list = []
+    
+    mcode_ptn = re.compile('\d{6}')
+    @property
+    def mcodes(self):
+        yield from self.changed_list
+        if not self.basepath.exists():
+            return []
+        yield from (x.stem for x in self.basepath.iterdir() if not x.is_dir() and re.match(self.__class__.mcode_ptn, x.stem) and x.stem not in self.changed_list)
+
+    def get_path(self, mcode=None, pickle_file=False):
+        if mcode:
+            mcode = str(mcode)
+            if pickle_file:
+                return self.basepath/Path(mcode+'.pkl')
+            else:
+                return self.basepath/Path(mcode)
+        else:
+            return self.basepath
+    
+    def __contains__(self, item):
+        parts = Path(item).parts
+        if len(parts) < 3:
+            return False
+        pcode, mcode, fcode = parts[:3]
+        self.lcdict[pcode] = self.lcdict.get(pcode, dict())
+        self.lcdict[pcode][mcode] = self.lcdict[pcode].get(mcode, self._load_sub(mcode)) 
+        return fcode in self.lcdict[pcode][mcode] 
+    
+    def _load_sub(self, mcode):      
+        path = self.get_path(mcode, True)
+        if not path.exists() or not os.path.getsize(path):
+            return []
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+
+    def __iter__(self):
+        for mcode in self.mcodes:
+            pcode = mcode[:2]
+            self.lcdict[pcode] = self.lcdict.get(pcode, dict())
+            d = self.lcdict[pcode].get(mcode, self._load_sub(mcode))
+            yield from (os.path.join(pcode, mcode, fcode) for fcode in d)
+
+    def __len__(self):
+        return sum(1 for v in self)
+
+    def append(self, key):
+        if key in self:
+            return
+        parts = Path(key).parts
+        if len(parts) != 3:
+            return
+        pcode, mcode, fcode = parts
+        self.lcdict[pcode] = self.lcdict.get(pcode, dict())
+        self.lcdict[pcode][mcode] =self.lcdict[pcode].get(mcode, self._load_sub(mcode)) + [fcode]
+        if mcode not in self.changed_list:
+            self.changed_list.append(mcode)
+    
+    def __getitem__(self, key):
+        key = str(key)
+        if re.match('\d{2}$', key):
+            return self.lcdict(key)
+        if re.match('\d{6}$', key):
+            try:
+                return self.lcdict[key[:2]][key]
+            except KeyError:
+                raise KeyError(key)
+        if re.match('(\d{2}/)\d{6}$', key):
+            mcode, fcode = Path(key).parts
+            try:
+                return self.lcdict[mcode][fcode]
+            except KeyError:
+                raise KeyError(key)
+        raise KeyError(key)
+    
+    def write(self):
+        os.makedirs(self.basepath, exist_ok=True)
+        for mcode in self.changed_list:
+            with open(self.get_path(mcode, True), 'wb') as f:
+                pickle.dump(self[mcode], f)
+                
+class HierarchicalDataset(object):
+    def __init__(self, dbpath, dataset_name, levels, only_reiki=True, only_sentence=True, *args, **kwargs):
+        self.path = os.path.abspath(dbpath)
         self.only_reiki = only_reiki
         self.only_sentence = only_sentence
         self.levels = sort_etypes(levels)
         self.dataset_name = dataset_name
-        self.kvsdicts['lawcodes'] = KVSDict(path=os.path.join(dbpath, 'lawcodes'))
+        self._closed = False
+
+        self.kvsdicts = dict()
+        self.lawcodes = Lawcodes(os.path.join(self.path, self.dataset_name, 'lawcodes'))
         self.kvsdicts["texts"] = {
-            l.__name__: KVSDict(path=os.path.join(dbpath, dataset_name, "texts", l.__name__)) for l in levels
+            l.__name__: ReikiKVSDict(path=os.path.join(self.path, self.dataset_name, "texts", l.__name__)) for l in self.levels
             }
         self.kvsdicts["edges"] = {
-            l.__name__: KVSDict(path=os.path.join(dbpath, dataset_name, "edges", l.__name__)) for l in levels[:-1]
+            l.__name__: ReikiKVSDict(path=os.path.join(self.path, self.dataset_name, "edges", l.__name__)) for l in self.levels[:-1]
             }
-        self.kvsdicts['edges']['Statutory'] = KVSDict(path=os.path.join(dbpath, dataset_name, "edges", 'Statuotory'))
-        self.morph_separator = Morph()
+        self.kvsdicts['edges']['Statutory'] = ReikiKVSDict(path=os.path.join(dbpath, dataset_name, "edges", 'Statuotory'))
 
-        
+    def is_closed(self):
+        return self._closed
+
+    def __getitem__(self, key):
+        return self.kvsdicts[key]
+  
     def get_tags(self, roots, level):
         for root in roots:
             current_level = re.split('\(', os.path.split(root)[1])[0]
@@ -52,51 +409,23 @@ class HierarchicalDataset(JStatutreeKVS):
                 yield root
             else:
                 yield from self.get_tags(self.kvsdicts['edges'][current_level][root], level) 
-    
-    def get_elem(self, code):
-        parts = Path(code).parts
 
-        query_root = self.kvsdicts["root"]['/'.join(parts[:3])]
-        query_etype = getattr(ml_etypes, re.split('\(', parts[-1])[0])
-        for e in query_root.depth_first_iteration(target_etypes=[query_etype]):
-            if e.code == code:
-                return e
-        return None
        
     def close(self):
-        self.kvsdicts['lawcodes'].close()
-        if 'texts' in self.kvsdicts:
-            for k in list(self.kvsdicts["texts"].keys()):
-                self.kvsdicts["texts"][k].close()
-                del self.kvsdicts["texts"][k]
-            del self.kvsdicts["texts"]
-
-        if 'edges' in self.kvsdicts:
-            for k in list(self.kvsdicts["edges"].keys()):
-                self.kvsdicts["edges"][k].close()
-                del self.kvsdicts["edges"][k]
-            del self.kvsdicts["edges"]
-        super().close()
+        self._closed = True
+        pass
 
     def iter_lawcodes(self):
-        yield from self.kvsdicts['lawcodes'][self.dataset_name]
+        yield from self.lawcodes
 
     def __len__(self):
-        return len(self.kvsdicts['lawcodes'][self.dataset_name])
+        return len(self.lawcodes)
 
     def set_data(self, reader):
         if self.only_reiki and not reader.lawdata.is_reiki():
             return False
         code = reader.lawdata.code
-        if not self.kvsdicts['lawdata'].get(code, None):
-            statutree = ml_etypes.convert_recursively(reader.get_tree())
-            self.kvsdicts["lawdata"][code] = reader.lawdata
-            self.kvsdicts["root"][code] = statutree
-            for e in statutree.depth_first_iteration():
-                if len(e.text) > 0:
-                    self.kvsdicts["sentence"][code] = e.text
-        else:
-            statutree = self.kvsdicts['root'][code]
+        statutree = reader.get_tree()
         writers = {
                 l:self.kvsdicts["texts"][l.__name__].write_batch(transaction=True)
                 for l in self.levels
@@ -144,57 +473,96 @@ class HierarchicalDataset(JStatutreeKVS):
                 continue
             if not HierarchicalDataset.keywords_search(keywords, rr.lawdata.name):
                 continue 
-            print('add:', rr.lawdata.name)
-            queue.put(rr)
+            
+            try:
+                list(rr.get_tree().depth_first_iteration([Sentence]))
+                #print('add:', rr.lawdata.name)
+                queue.put(rr)
+            except LawError as e:
+                #print(e)
+                
+                #print('add:', rr.lawdata.name)
+                continue
         else:
             queue.put(None)
             close_signal.set()
             
     def register_from_codes(self, codes, basedir, maxsize=None, keywords=None, **kwargs):
         # get lawcodes in the dataset
-        exist_lawcodes = self.kvsdicts['lawcodes'].get(self.dataset_name, [])
         rr_queue = queue.Queue()
         close_signal  = threading.Event()
-        thread = threading.Thread(target=self._get_rr, args=(codes, basedir, exist_lawcodes, rr_queue, close_signal, keywords))
+        thread = threading.Thread(target=self._get_rr, args=(codes, basedir, self.lawcodes, rr_queue, close_signal, keywords))
         thread.start()
-        while not close_signal.is_set():
+        writers = {}
+        writer_list = []
+        for k in self.kvsdicts.keys():
+            #print(k, self.kvsdicts[k])
+            writers[k] = {l:v.write_batch() for l, v in self.kvsdicts[k].items()}
+            writer_list.extend(writers[k].values())
+        while True:
             item = rr_queue.get()
             if item is None:
+                #print('BREAK')
                 break
             rr = item
-            if maxsize is not None and len(exist_lawcodes) >= maxsize:
-                print(exist_lawcodes)
-                print(len(exist_lawcodes))
+            if maxsize is not None and len(self.lawcodes) >= maxsize:
+                print(self.lawcodes)
+                print(len(self.lawcodes))
                 close_signal.set()
                 thread.join()
                 break
-            try:
-                if self.set_data(rr):
-                    exist_lawcodes.append(rr.lawdata.code)
-                rr.close()
-            except LawError as e:
-                pass
-                #print(e)
+            reader = rr
+            #print('Check:', rr.lawdata.name, rr.lawdata.code)
+            if self.only_reiki and not reader.lawdata.is_reiki():
+                #print('Not Reiki')
+                continue
+            #print('Reiki')
+            code = reader.lawdata.code
+            #root = ETYPES[0](self.lawdata)
+            #root.root = self.root_etree
+            #return root
+            #print(rr.root_etree)
+            statutree = reader.get_tree()
+            for li, level in enumerate(self.levels):
+                next_elems = list(statutree.depth_first_search(level, valid_vnode=True))
+                if li == 0:
+                    writers['edges']['Statutory'][reader.lawdata.code] = [e.code for e in next_elems]
+                for elem in next_elems:
+                    #print("reg:", "vnode" if elem.is_vnode else "node", elem.code)
+                    levelstr = level if isinstance(level, str) else level.__name__
+                    if self.only_sentence:
+                        writers['texts'][levelstr][elem.code] = "".join(elem.iter_sentences()) 
+                    else:
+                        writers['texts'][levelstr][elem.code] = "".join(elem.iter_texts())
+                    if level != self.levels[-1]:
+                        writers["edges"][levelstr][elem.code] = [e.code for e in elem.depth_first_search(self.levels[li+1], valid_vnode=True)]
+            self.lawcodes.append(rr.lawdata.code)
+            print('reg:', item.get_tree())
+            rr.close()
+        self.lawcodes.write()
         self.is_empty = False
-        self.kvsdicts['lawcodes'][self.dataset_name] = exist_lawcodes
+        for writer in writer_list:
+              writer.write()
 
-    def set_iterator_mode(self, level, tag=None, sentence=None, tokenizer='mecab', gensim=False):
+    def set_iterator_mode(self, level, tag=None, sentence=None, tokenizer='mecab', gensim=False, multithread=False):
         self.itermode_level = level
         self.itermode_tag = tag if tag is not None else self.__dict__.get('itermode_tag', True)
         self.itermode_sentence = sentence if sentence is not None else self.__dict__.get('itermode_sentence', True)
-        self.tokenizer = self.morph_separator.surfaces if tokenizer == 'mecab' else tokenizer
+        self.tokenizer = Morph().surfaces if tokenizer == 'mecab' else tokenizer
+        self.multithread = multithread
         self.gensim = gensim
 
     def __iter__(self):
         assert self.__dict__.get('itermode_level', False), 'You must call set_iterator_mode before call iterator'
+        d = self.kvsdicts['texts'][self.itermode_level]
         if self.gensim:
-            self.generator = map(lambda x: TaggedDocument(self.preprocess(x[1]), [x[0]]), self.kvsdicts['texts'][self.itermode_level].items())
+            self.generator = map(lambda x: TaggedDocument(self.preprocess(x[1]), [x[0]]), getattr(d, 'qitems' if self.multithread else 'items')())
         elif self.itermode_tag and self.itermode_sentence:
-            self.generator = map(lambda x: (x[0], self.preprocess(x[1])), self.kvsdicts['texts'][self.itermode_level].items())
+            self.generator = map(lambda x: (x[0], self.preprocess(x[1])), getattr(d, 'qitems' if self.multithread else 'items')())
         elif self.itermode_sentence:
-            self.generator = map(lambda x: self.preprocess(x), self.kvsdicts['texts'][self.itermode_level].values())
+            self.generator = map(lambda x: self.preprocess(x), getattr(d, 'qvalues' if self.multithread else 'values')())
         elif self.itermode_tag:
-            self.generator = self.kvsdicts['texts'][self.itermode_level].keys()
+            self.generator = getattr(d, 'qkeys' if self.multithread else 'keys')()
         else:
             self.generator = (x for x in [])
         return self

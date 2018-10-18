@@ -11,6 +11,21 @@ import re
 import os
 from pathlib import Path
 
+import graphviz as viz
+
+
+
+def jst2viz(elem, bottom_etypes = [], bottom_nodes=[], _viz=None, _subgraph=True, return_sides=False):
+    if _subgraph:
+        with G.subgraph(name='cluster_'+str(elem.code)) as sg:
+            jst2viz_core(elem, bottom_etypes, bottom_nodes, sg)
+            sg.attr(label=str(elem))
+    else:
+        jst2viz_core(elem, bottom_etypes, bottom_nodes, G)
+    if return_sides:
+        return G, bottom_nodes[0], bottom_nodes[-1]
+    return G
+
 
 
 class HierarchicalModel(object):
@@ -27,7 +42,7 @@ class HierarchicalModel(object):
     
         return vectors, index
 
-    def comptable(self, dataset, query, targets, threshold, level):
+    def comptable(self, dataset, query, targets, threshold, level, with_tag=False):
         qlevel = re.split('\(', os.path.split(query)[1])[0]
         
         # construct target sentence space
@@ -39,28 +54,42 @@ class HierarchicalModel(object):
             target_vectors, target_spaces[ltag] = self.create_index(level, target_tags[ltag])
 
         columns = []
-        name = str(dataset.get_elem(query))
+        #name = str(dataset.get_elem(query))
+        name = query
+        if with_tag:
+            columns.append(("{0}({1})".format(name, query), 'tag'))
         columns.append(("{0}({1})".format(name, query), level))
         for ltag in targets:
             tag = ltag#os.path.split(ltag)[0]
-            name = str(dataset.get_elem(tag))
+            #name = str(dataset.get_elem(tag))
+            name = ltag
+            if with_tag:
+                columns.append(("{0}({1})".format(name, tag), 'tag'))
             columns.append(("{0}({1})".format(name, tag), level))
             columns.append(("{0}({1})".format(name, tag), 'Distance'))
         df = pd.DataFrame(columns=columns)
         df.columns = pd.MultiIndex.from_tuples(columns)
-
         sid = 0
         for j, s in enumerate(dataset.get_tags([query], level)):
             sid += 1
-            df.loc[sid, columns[0]] = dataset.kvsdicts["texts"][level][s]
+            if with_tag:
+                df.loc[sid, columns[0]] = s
+                df.loc[sid, columns[1]] = dataset.kvsdicts["texts"][level][s]
+            else:
+                df.loc[sid, columns[0]] = dataset.kvsdicts["texts"][level][s]
             for l, ltag in enumerate(targets):
                 resi, resd  = target_spaces[ltag].knnQuery(self.layers[level][s], 1)
                 if resd[0] < threshold:
-                    df.loc[sid, (columns[2*l+1][0], level)] = dataset.kvsdicts["texts"][level][target_tags[ltag][resi[0]]]
-                    df.loc[sid, (columns[2*l+1][0], 'Distance')] = round(resd[0], 3)
+                    if with_tag:
+                        df.loc[sid, (columns[3*l+2][0], 'tag')] =target_tags[ltag][resi[0]]
+                        df.loc[sid, (columns[3*l+2][0], level)] = dataset.kvsdicts["texts"][level][target_tags[ltag][resi[0]]]
+                        df.loc[sid, (columns[3*l+2][0], 'Distance')] = round(resd[0], 3)
+                    else:
+                        df.loc[sid, (columns[2*l+1][0], level)] = dataset.kvsdicts["texts"][level][target_tags[ltag][resi[0]]]
+                        df.loc[sid, (columns[2*l+1][0], 'Distance')] = round(resd[0], 3)
         return df
     
-    def topk_comptable(self, dataset, query, k, threshold, level, root_threshold=None):
+    def topk_comptable(self, dataset, query, k, threshold, level, root_threshold=None, with_tag=False):
         qlevel = re.split('\(', os.path.split(query)[1])[0]
         dataset.set_iterator_mode(level=qlevel, tag=True, sentence=False)
         law_tags = list(dataset)
@@ -71,11 +100,11 @@ class HierarchicalModel(object):
             if law_tags[i] != query:
                 continue
             if root_threshold and sim < root_threshold:
-                print("not enough distance", dataset.get_elem(law_tags[i]))
+                #print("not enough distance", dataset.get_elem(law_tags[i]))
                 k -= 1
                 continue
             target_law_tags.append(law_tags[i])
-        return self.comptable(dataset, query, target_law_tags[:k], threshold, level)
+        return self.comptable(dataset, query, target_law_tags[:k], threshold, level, with_tag)
     
     
     def set_trained_model_layer(self, level, model, threshold):

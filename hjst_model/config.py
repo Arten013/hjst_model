@@ -7,6 +7,9 @@ from jstatutree.graphtree import graph_etypes, graph_lawdata
 from jstatutree.etypes import get_etypes
 from .hierarchical_model import HierarchicalModel
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+import traceback
 """
 experiment = HJSTExperiment()
 
@@ -151,7 +154,8 @@ class LayerModelConfig(ABConfig):
         if self.has_section(name):
             if overwrite:
                 self.change_section(name)
-                shutil.rmtree(self.model_path)
+                if os.path.exists(self.model_path):
+                    shutil.rmtree(self.model_path)
                 self.remove_section(name)
             else:
                 print('Layer', name, 'has already exists.')
@@ -215,10 +219,15 @@ class DatasetConfigBase(ABConfig):
         if self['gov_codes'] == '':
             yield self['dataset_basepath']
             raise StopIteration
-        for gov_code in self['gov_codes']:
-            gov_dir = gov_code if len(gov_code) == 2 else gov_code[:2]+'/'+gov_code
-            yield os.path.join(self['dataset_basepath'], gov_dir)
-
+        basepath = self['dataset_basepath']
+        for gcode in self['gov_codes']:
+            if re.match('\d{2}$', gcode):
+                yield from (x for x in Path(basepath, gcode).iterdir() if x.is_dir() and re.match('\d{6}', x.name))
+            elif re.match('\d{6}', gcode):
+                yield Path(basepath, gcode[:2], gcode)
+            else:
+                raise ValueError()
+                
 class DatasetNEOConfig(NEOConfig, DatasetConfigBase):
     def prepare_dataset(self, graph_construction=True, registering=True, workers=multiprocessing.cpu_count()):
         assert self.section.name != self.__class__.DEFAULT_SECTION, 'You must set dataset before get hgd instance'
@@ -231,20 +240,43 @@ class DatasetNEOConfig(NEOConfig, DatasetConfigBase):
                 dataset.add_government(os.path.split(dataset_path)[0])
         return dataset
 
+def _reg_func(path, dbdir, name, levels, onlyr, onlys, maxsize, keywords):
+    try:
+        dataset = HierarchicalDataset(dbdir, name, levels, onlyr, onlys, maxsize, keywords)
+        dataset.register_directory(path, overwrite=True, maxsize=maxsize, keywords=keywords)
+    except Exception as e:
+        return traceback.format_exc()
+    return 'executor finish: '+str(path)
+    
 class DatasetKVSConfig(DatasetConfigBase):
     def set_directory(self, dataset_basepath, savedir):
         super().set_directory(dataset_basepath)
         self['savedir'] = savedir
 
     def prepare_dataset(self, registering=True):
-        dataset = HierarchicalDataset(self['savedir'], self.section_name, self['levels'],self['only_reiki'], self['only_sentence'])
         if not registering:
-            return dataset
-        for path in self.iter_dataset_paths():
-            print(path)
-            dataset.register_directory(path, overwrite=True, maxsize=self.get('maxsize', None), keywords=self.get('keywords', None))
+            return HierarchicalDataset(self['savedir'], self.section_name, self['levels'],self['only_reiki'], self['only_sentence'])
+        
+        futures = []
+        with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()-1) as e:
+            for path in self.iter_dataset_paths():
+                print('executor submit:', path)
+                futures.append(
+                    e.submit(
+                        _reg_func,
+                        path,
+                        self['savedir'],
+                        self.section_name,
+                        self['levels'],
+                        self['only_reiki'],
+                        self['only_sentence'],
+                        self.get('maxsize', None), 
+                        self.get('keywords', None)
+                    )
+                )
+        for future in as_completed(futures):
+            print(future.result())
         additional_govs = self['gov_codes']
         with self.temporal_section_change(self.DEFAULT_SECTION):
             self['gov_codes'] = self['gov_codes'] + additional_govs
-        return dataset
-
+        return HierarchicalDataset(self['savedir'], self.section_name, self['levels'],self['only_reiki'], self['only_sentence'])
